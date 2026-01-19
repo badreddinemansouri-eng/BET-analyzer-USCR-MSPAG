@@ -1686,42 +1686,34 @@ class IUPACBETAnalyzer:
             self.quantum_pore_estimation = {}
     def extract_data_from_excel(self, uploaded_file):
         """COMPLETE LOGICAL EXTRACTION: Specific columns only, no overcomplication"""
+       try:
+        uploaded_file.seek(0)
+        engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
+
+        df = pd.read_excel(
+            uploaded_file,
+            engine=engine,
+            header=None
+        )
+
+        df = df.apply(pd.to_numeric, errors="coerce")
+        df = df.dropna(how="any")
+
+    except Exception as e:
+        st.error(f"Error reading Excel file: {e}")
+        return False
+
+    # Helper function MUST be outside except
+    def safe_float_conversion(cell_value):
+        if pd.isna(cell_value):
+            return np.nan
         try:
-            # Reset file pointer (CRITICAL for Streamlit Cloud)
-            uploaded_file.seek(0)
-                            # Choose engine explicitly
-            engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
-        
-            # Read Excel safely using buffer
-            df = pd.read_excel(
-                io.BytesIO(uploaded_file.read()),
-                engine=engine,
-                header=None
-            )
-            
-            # Force numeric conversion (PREVENTS ZERO RESULTS)
-            df = df.apply(pd.to_numeric, errors="coerce")
-            
-                # Drop empty rows
-            df = df.dropna(how="any")
-            
-        except Exception as e:
-            st.error(f"Error reading Excel file: {e}")
-            st.stop()
-        
-            # Helper function to safely convert to float
-            def safe_float_conversion(cell_value):
-                if pd.isna(cell_value):
-                    return np.nan
-                try:
-                    # Handle time values like "01:07" by converting to minutes
-                    if isinstance(cell_value, str) and ':' in cell_value:
-                        time_parts = cell_value.split(':')
-                        if len(time_parts) == 2:
-                            return float(time_parts[0]) + float(time_parts[1])/60
-                    return float(cell_value)
-                except (ValueError, TypeError):
-                    return np.nan
+            if isinstance(cell_value, str) and ':' in cell_value:
+                h, m = cell_value.split(':')
+                return float(h) + float(m)/60
+            return float(cell_value)
+        except:
+            return np.nan
         
             # LOGICAL: Extract adsorption data from columns L and M (rows 29-59)
             p_rel_ads_values = []
@@ -4360,5 +4352,6 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 

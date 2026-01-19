@@ -1,10 +1,12 @@
 streamlit
-numpy
 pandas
+numpy
 matplotlib
 scipy
 scikit-learn
 plotly
-requests
+openpyxl
+xlrd>=2.0.1
 beautifulsoup4
+requests
 

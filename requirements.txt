@@ -5,8 +5,10 @@ matplotlib
 scipy
 scikit-learn
 plotly
-openpyxl
-xlrd>=2.0.1
 beautifulsoup4
 requests
+xlrd==2.0.1
+openpyxl
+lxml
+
 

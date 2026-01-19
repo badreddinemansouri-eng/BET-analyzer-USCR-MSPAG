@@ -1687,11 +1687,27 @@ class IUPACBETAnalyzer:
     def extract_data_from_excel(self, uploaded_file):
         """COMPLETE LOGICAL EXTRACTION: Specific columns only, no overcomplication"""
         try:
-            # Determine engine based on file extension
-            engine = 'xlrd' if uploaded_file.name.lower().endswith('.xls') else 'openpyxl'
+            # Reset file pointer (CRITICAL for Streamlit Cloud)
+            uploaded_file.seek(0)
+                            # Choose engine explicitly
+            engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
         
-            # Read Excel file
-            df = pd.read_excel(uploaded_file, engine=engine, header=None)
+            # Read Excel safely using buffer
+            df = pd.read_excel(
+                io.BytesIO(uploaded_file.read()),
+                engine=engine,
+                header=None
+            )
+            
+            # Force numeric conversion (PREVENTS ZERO RESULTS)
+            df = df.apply(pd.to_numeric, errors="coerce")
+            
+                # Drop empty rows
+                df = df.dropna(how="any")
+            
+        except Exception as e:
+            st.error(f"Error reading Excel file: {e}")
+            st.stop()
         
             # Helper function to safely convert to float
             def safe_float_conversion(cell_value):
@@ -4344,3 +4360,4 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+

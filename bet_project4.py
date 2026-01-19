@@ -1686,52 +1686,52 @@ class IUPACBETAnalyzer:
             self.quantum_pore_estimation = {}
     def extract_data_from_excel(self, uploaded_file):
         """COMPLETE LOGICAL EXTRACTION: Specific columns only, no overcomplication"""
-       try:
-        uploaded_file.seek(0)
-        engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
-
-        df = pd.read_excel(
-            uploaded_file,
-            engine=engine,
-            header=None
-        )
-
-        df = df.apply(pd.to_numeric, errors="coerce")
-        df = df.dropna(how="any")
-
-    except Exception as e:
-        st.error(f"Error reading Excel file: {e}")
-        return False
-
-    # Helper function MUST be outside except
-    def safe_float_conversion(cell_value):
-        if pd.isna(cell_value):
-            return np.nan
         try:
-            if isinstance(cell_value, str) and ':' in cell_value:
-                h, m = cell_value.split(':')
-                return float(h) + float(m)/60
-            return float(cell_value)
-        except:
-            return np.nan
+         uploaded_file.seek(0)
+         engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
+
+         df = pd.read_excel(
+             uploaded_file,
+             engine=engine,
+             header=None
+         )
+         df = df.dropna(axis=1, how="all")
+         df = df.apply(pd.to_numeric, errors="coerce")
+         df = df.dropna(how="any")
+
+     except Exception as e:
+         st.error(f"Error reading Excel file: {e}")
+         return False
+
+     # Helper function MUST be outside except
+     def safe_float_conversion(cell_value):
+         if pd.isna(cell_value):
+             return np.nan
+         try:
+             if isinstance(cell_value, str) and ':' in cell_value:
+                 h, m = cell_value.split(':')
+                 return float(h) + float(m)/60
+             return float(cell_value)
+         except:
+             return np.nan
         
-            # LOGICAL: Extract adsorption data from columns L and M (rows 29-59)
-            p_rel_ads_values = []
-            Q_ads_values = []
+         # LOGICAL: Extract adsorption data from columns L and M (rows 29-59)
+         p_rel_ads_values = []
+         Q_ads_values = []
         
             for i in range(28, 59):  # Rows 29-59 (0-indexed: 28-58)
-                if i < len(df) and 11 < len(df.columns) and 12 < len(df.columns):
-                    p_val = safe_float_conversion(df.iloc[i, 11])  # Column L (index 11)
-                    q_val = safe_float_conversion(df.iloc[i, 12])  # Column M (index 12)
-                
-                    # Only add valid, logical data points
-                    if (not np.isnan(p_val) and not np.isnan(q_val) and 
-                        p_val > 0 and p_val <= 1 and q_val > 0):
-                        p_rel_ads_values.append(p_val)
-                        Q_ads_values.append(q_val)
-                    # Stop when we start getting invalid data after valid points
-                    elif len(p_rel_ads_values) > 10 and (np.isnan(p_val) or np.isnan(q_val)):
-                        break
+                 if i < len(df) and 11 < len(df.columns) and 12 < len(df.columns):
+                 p_val = safe_float_conversion(df.iloc[i, 11])  # Column L (index 11)
+                 q_val = safe_float_conversion(df.iloc[i, 12])  # Column M (index 12)
+        
+                # Only add valid, logical data points
+                   if (not np.isnan(p_val) and not np.isnan(q_val) and 
+                     p_val > 0 and p_val <= 1 and q_val > 0):
+                     p_rel_ads_values.append(p_val)
+                     Q_ads_values.append(q_val)
+                 # Stop when we start getting invalid data after valid points
+                 elif len(p_rel_ads_values) > 10 and (np.isnan(p_val) or np.isnan(q_val)):
+                       break
         
             # Validate we have reasonable adsorption data
             if len(p_rel_ads_values) < 5:
@@ -4352,6 +4352,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

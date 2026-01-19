@@ -1687,33 +1687,33 @@ class IUPACBETAnalyzer:
     def extract_data_from_excel(self, uploaded_file):
         """COMPLETE LOGICAL EXTRACTION: Specific columns only, no overcomplication"""
         try:
-           uploaded_file.seek(0)
-           engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
+        uploaded_file.seek(0)
+        engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
 
-          df = pd.read_excel(
-              uploaded_file,
-              engine=engine,
-              header=None
-          )
-          df = df.dropna(axis=1, how="all")
-          df = df.apply(pd.to_numeric, errors="coerce")
-          df = df.dropna(how="any")
+        df = pd.read_excel(
+            uploaded_file,
+            engine=engine,
+            header=None
+        )
 
-      except Exception as e:
-          st.error(f"Error reading Excel file: {e}")
-          return False
+        df = df.apply(pd.to_numeric, errors="coerce")
+        df = df.dropna(how="any")
 
-     # Helper function MUST be outside except
-      def safe_float_conversion(cell_value):
-          if pd.isna(cell_value):
-             return np.nan
-          try:
-             if isinstance(cell_value, str) and ':' in cell_value:
-                 h, m = cell_value.split(':')
-                 return float(h) + float(m)/60
-             return float(cell_value)
-          except:
-                return np.nan
+    except Exception as e:
+        st.error(f"Error reading Excel file: {e}")
+        return False
+
+    # Helper function MUST be outside except
+    def safe_float_conversion(cell_value):
+        if pd.isna(cell_value):
+            return np.nan
+        try:
+            if isinstance(cell_value, str) and ':' in cell_value:
+                h, m = cell_value.split(':')
+                return float(h) + float(m)/60
+            return float(cell_value)
+        except:
+            return np.nan
         
          # LOGICAL: Extract adsorption data from columns L and M (rows 29-59)
           p_rel_ads_values = []
@@ -4352,6 +4352,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

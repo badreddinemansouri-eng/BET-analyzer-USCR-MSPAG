@@ -1703,7 +1703,7 @@ class IUPACBETAnalyzer:
             df = df.apply(pd.to_numeric, errors="coerce")
             
                 # Drop empty rows
-                df = df.dropna(how="any")
+            df = df.dropna(how="any")
             
         except Exception as e:
             st.error(f"Error reading Excel file: {e}")
@@ -4360,4 +4360,5 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 

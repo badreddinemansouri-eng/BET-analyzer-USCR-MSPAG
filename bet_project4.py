@@ -1687,37 +1687,37 @@ class IUPACBETAnalyzer:
     def extract_data_from_excel(self, uploaded_file):
         """COMPLETE LOGICAL EXTRACTION: Specific columns only, no overcomplication"""
         try:
-         uploaded_file.seek(0)
-         engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
+           uploaded_file.seek(0)
+           engine = "xlrd" if uploaded_file.name.lower().endswith(".xls") else "openpyxl"
 
-         df = pd.read_excel(
-             uploaded_file,
-             engine=engine,
-             header=None
-         )
-         df = df.dropna(axis=1, how="all")
-         df = df.apply(pd.to_numeric, errors="coerce")
-         df = df.dropna(how="any")
+          df = pd.read_excel(
+              uploaded_file,
+              engine=engine,
+              header=None
+          )
+          df = df.dropna(axis=1, how="all")
+          df = df.apply(pd.to_numeric, errors="coerce")
+          df = df.dropna(how="any")
 
-     except Exception as e:
-         st.error(f"Error reading Excel file: {e}")
-         return False
+      except Exception as e:
+          st.error(f"Error reading Excel file: {e}")
+          return False
 
      # Helper function MUST be outside except
-     def safe_float_conversion(cell_value):
-         if pd.isna(cell_value):
+      def safe_float_conversion(cell_value):
+          if pd.isna(cell_value):
              return np.nan
-         try:
+          try:
              if isinstance(cell_value, str) and ':' in cell_value:
                  h, m = cell_value.split(':')
                  return float(h) + float(m)/60
              return float(cell_value)
-         except:
-             return np.nan
+          except:
+                return np.nan
         
          # LOGICAL: Extract adsorption data from columns L and M (rows 29-59)
-         p_rel_ads_values = []
-         Q_ads_values = []
+          p_rel_ads_values = []
+          Q_ads_values = []
         
             for i in range(28, 59):  # Rows 29-59 (0-indexed: 28-58)
                  if i < len(df) and 11 < len(df.columns) and 12 < len(df.columns):
@@ -4352,6 +4352,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

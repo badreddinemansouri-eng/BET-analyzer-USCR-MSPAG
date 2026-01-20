@@ -1851,7 +1851,8 @@ class IUPACBETAnalyzer:
                 st.success(f"✅ Extracted {len(pore_diameter_values)} pore distribution points")
             else:
                 st.info("ℹ️ No pore distribution data found (normal for some files)")
-        
+            self.data = self.data.copy()
+
             return True
         
         except Exception as e:
@@ -2009,11 +2010,16 @@ class IUPACBETAnalyzer:
             'x_bet': x_bet, 'y_bet': y_bet,
             'iupac_compliant': c_value_ok and pressure_range_ok and r_squared_ok
         }
+        self.results['bet'] = self.results['bet'].copy()
 
     def _analyze_pores(self):
         """
         Final pore analysis dispatcher (cloud-safe).
         """
+
+        if not self.results.get("bet"):
+            st.error("❌ BET results missing — pore analysis skipped")
+            return
 
         # ---------- NO PSD → ESTIMATION ----------
         if self.data.get('pore_diameter') is None:
@@ -2079,119 +2085,72 @@ class IUPACBETAnalyzer:
         """
         Complete pore analysis (cloud-robust, numerically stable).
         """
-        try:
-            results = {}
-            # ---------- ADSORPTION VOLUME ----------
-            Q_ads = self.data.get('Q_ads', [])
-            if len(Q_ads) > 0:
-                results['total_volume_adsorption'] = max(
-                    0.001, np.max(Q_ads) * 0.001546
-                )
+        results = {}
     
-            # ---------- PSD INTEGRATION ----------
-            pore_diam = self.data.get('pore_diameter')
-            dV_dlogD = self.data.get('dV_dlogD')
+        # Adsorption pore volume
+        Q_ads = self.data.get('Q_ads', [])
+        if len(Q_ads) > 0:
+            results['total_volume_adsorption'] = np.max(Q_ads) * 0.001546
     
-            if pore_diam is not None and dV_dlogD is not None and len(pore_diam) > 2:
-                pore_diam = np.asarray(pore_diam)
-                dV_dlogD = np.abs(np.asarray(dV_dlogD))
+        # PSD integration
+        pore_diam = self.data.get('pore_diameter')
+        dV_dlogD = self.data.get('dV_dlogD')
     
-                valid = (~np.isnan(pore_diam)) & (~np.isnan(dV_dlogD)) & (pore_diam > 0)
-                if np.sum(valid) > 2:
-                    log_d = np.log10(pore_diam[valid])
-                    V_psd = np.trapz(dV_dlogD[valid], log_d)
-                    results['total_volume_psd'] = max(0.001, V_psd)
+        if pore_diam is not None and dV_dlogD is not None and len(pore_diam) > 2:
+            valid = (pore_diam > 0) & (~np.isnan(dV_dlogD))
+            if np.sum(valid) > 2:
+                V_psd = np.trapz(np.abs(dV_dlogD[valid]), np.log10(pore_diam[valid]))
+                results['total_volume_psd'] = V_psd
     
-            # ---------- MICROPOROUS VOLUME (DR) ----------
-            bet = self.results.get('bet', {})
-            Q_m = bet.get('Q_m')
+        # Micropore volume (DR)
+        bet = self.results.get('bet', {})
+        Q_m = bet.get('Q_m', 0)
+        if Q_m > 0:
+            results['micropore_volume_DR'] = Q_m * 0.001546 * 0.8
     
-            if Q_m is not None and Q_m > 0:
-                results['micropore_volume_DR'] = max(
-                    0.001, Q_m * 0.001546 * 0.8
-                )
-    
-            # ---------- EXTERNAL SURFACE AREA ----------
-            S_BET = bet.get('S_BET', 0)
-            if S_BET > 0:
-                C = bet.get('C', 0)
-                if C < 50:
-                    results['external_surface_area'] = S_BET * 0.9
-                elif C > 200:
-                    results['external_surface_area'] = S_BET * 0.3
-                else:
-                    results['external_surface_area'] = S_BET * 0.6
-    
-            # ---------- FINAL TOTAL VOLUME ----------
-            V_ads = results.get('total_volume_adsorption', 0)
-            V_psd = results.get('total_volume_psd', 0)
-            V_micro = results.get('micropore_volume_DR', 0)
-    
-            final_total = max(V_ads, V_psd, V_micro)
-    
-            results['final_total_volume'] = final_total
-            results['total_volume'] = final_total
-    
-            # ---------- FRACTIONS ----------
-            results['microporous_fraction'] = V_micro / final_total if final_total > 0 else 0
-            results['mesoporous_fraction'] = max(0, 1 - results['microporous_fraction'])
-            results['macroporous_fraction'] = 0
-    
-            # ---------- PSD-DERIVED DIAMETERS ----------
-            if pore_diam is not None and dV_dlogD is not None:
-                pore_nm = pore_diam / 10.0
-                dV = np.abs(dV_dlogD)
-    
-                valid = (pore_nm > 0) & (dV > 0)
-                if np.sum(valid) >= 2:
-                    valid_idx = np.where(valid)[0]
-                    peak_idx = valid_idx[np.argmax(dV[valid])]
-                    peak_d = float(pore_nm[peak_idx])
-    
-                    weights = dV[valid]
-                    diameters = pore_nm[valid]
-                    mean_d = np.average(diameters, weights=weights)
-    
-                    if not np.isfinite(mean_d) or mean_d <= 0:
-                        mean_d = peak_d
-    
-                    results['peak_diameter'] = peak_d
-                    results['average_diameter'] = float(mean_d)
-                else:
-                    results['peak_diameter'] = 0.0
-                    results['average_diameter'] = 0.0
-    
-            # ---------- POROSITY TYPE ----------
-            if results['microporous_fraction'] > 0.7:
-                porosity = 'Microporous'
-            elif results['microporous_fraction'] > 0.3:
-                porosity = 'Micro-Mesoporous'
-            else:
-                porosity = 'Mesoporous/Macroporous'
-    
-            results['porosity_type'] = porosity
-            results['pore_size_distribution'] = porosity
-    
-            # ---------- UI NORMALIZATION ----------
-            results['microporous_volume'] = results.get('micropore_volume_DR', 0)
-            results['external_surface_area'] = results.get('external_surface_area', 0)
-            results['regression_quality'] = min(
-                0.99, 0.85 + bet.get('r_squared', 0) * 0.1
+        # External surface area
+        S_BET = bet.get('S_BET', 0)
+        if S_BET > 0:
+            C = bet.get('C', 0)
+            results['external_surface_area'] = (
+                S_BET * 0.9 if C < 50 else S_BET * 0.3 if C > 200 else S_BET * 0.6
             )
-       
-            return results
     
-        except Exception:
-            return {
-                'final_total_volume': 0.0,
-                'total_volume': 0.0,
-                'microporous_volume': 0.0,
-                'external_surface_area': 0.0,
-                'microporous_fraction': 0.0,
-                'mesoporous_fraction': 1.0,
-                'macroporous_fraction': 0.0,
-                'porosity_type': 'Unknown'
-            }
+        # FINAL TOTAL VOLUME (FIXED)
+        volumes = [
+            results.get('total_volume_adsorption', 0),
+            results.get('total_volume_psd', 0),
+            results.get('micropore_volume_DR', 0)
+        ]
+        final_total = max(v for v in volumes if v > 0)
+    
+        results['final_total_volume'] = final_total
+        results['total_volume'] = final_total
+    
+        # Fractions
+        V_micro = results.get('micropore_volume_DR', 0)
+        results['microporous_fraction'] = V_micro / final_total if final_total > 0 else 0
+        results['mesoporous_fraction'] = 1 - results['microporous_fraction']
+        results['macroporous_fraction'] = 0
+    
+        # Diameters
+        if pore_diam is not None and dV_dlogD is not None:
+            pore_nm = pore_diam / 10
+            weights = np.abs(dV_dlogD)
+            valid = (pore_nm > 0) & (weights > 0)
+            if np.sum(valid) > 1:
+                results['peak_diameter'] = pore_nm[valid][np.argmax(weights[valid])]
+                results['average_diameter'] = np.average(pore_nm[valid], weights=weights[valid])
+    
+        # Porosity type
+        results['porosity_type'] = (
+            "Microporous" if results['microporous_fraction'] > 0.7
+            else "Micro-Mesoporous" if results['microporous_fraction'] > 0.3
+            else "Mesoporous/Macroporous"
+        )
+    
+        results['microporous_volume'] = V_micro
+        return results
 
 
 
@@ -3596,7 +3555,11 @@ following IUPAC standards for reliable.*
     )
     
     # Main analysis function
-    analyzer = IUPACBETAnalyzer()
+    if "analyzer" not in st.session_state:
+       st.session_state.analyzer = IUPACBETAnalyzer()
+
+    analyzer = st.session_state.analyzer
+
     
    # uploaded_file = st.sidebar.file_uploader(
     #    "📤 Upload ASAP 2020 Excel File",
@@ -4269,6 +4232,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

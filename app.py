@@ -1917,50 +1917,50 @@ class IUPACBETAnalyzer:
     def perform_comprehensive_analysis(self, bet_range=(0.05, 0.3)):
         """LOGICAL ANALYSIS: Handle missing data gracefully with morphology prediction"""
         try:
-            # Basic validation
             if len(self.data['p_rel_ads']) < 5:
                 st.error("Insufficient data points for analysis")
                 return
-        
-            # BET Analysis (always possible)
+    
+            # BET Analysis
             self._perform_bet_analysis(bet_range)
-        
-            # Pore analysis (only if pore data exists)
-            if (self.data.get('pore_diameter') is not None and 
-                len(self.data['pore_diameter']) > 3):
+    
+            # ============================
+            # ✅ FIXED PORE ANALYSIS LOGIC
+            # ============================
+            if self.data.get('pore_diameter') is not None and len(self.data['pore_diameter']) > 3:
                 self._analyze_pores()
             else:
-                # Create reasonable estimates from BET data
-                self.results['pores_estimated'] = self._estimate_pore_properties()
-                self.results['pores']['estimated'] = True
-        
-            # Isotherm classification (always possible)
+                estimated = self._estimate_pore_properties()
+                estimated['data_quality'] = 'Estimated (no PSD data)'
+                self.results['pores'] = estimated   # ✅ SAFE ASSIGNMENT
+    
+            # Isotherm classification
             self._classify_isotherm()
-        
-            # Hysteresis analysis (only if desorption data exists)
+    
+            # Hysteresis
             if len(self.data.get('Q_des', [])) > 5:
                 self._analyze_hysteresis()
             else:
                 self.results['hysteresis'] = {
-                    'type': 'No desorption data', 
+                    'type': 'No desorption data',
                     'index': 0,
                     'closure_point': 0
                 }
-        
+    
             # Material identification
             self.material_info = self.identify_material(self.data['sample_id'])
-        
-            # 3D structural prediction (always possible with estimates)
+    
+            # 3D prediction
             if self.material_info:
                 self._perform_3d_structural_prediction()
-            
-            # NEW: TEM-level morphology prediction
+    
             self._perform_tem_level_morphology_prediction()
-        
+    
             st.success("✅ Analysis completed successfully!")
-        
+    
         except Exception as e:
             st.error(f"❌ Analysis error: {str(e)}")
+
 
     def _perform_bet_analysis(self, bet_range):
         """Comprehensive BET analysis with error estimation following IUPAC standards"""
@@ -2173,7 +2173,7 @@ class IUPACBETAnalyzer:
             results['regression_quality'] = min(
                 0.99, 0.85 + bet.get('r_squared', 0) * 0.1
             )
-    
+           results.setdefault('peak_diameter', 0.0)
             return results
     
         except Exception:
@@ -4269,6 +4269,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

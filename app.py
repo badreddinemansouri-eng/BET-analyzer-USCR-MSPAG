@@ -1667,7 +1667,11 @@ class IUPACBETAnalyzer:
     def __init__(self):
         # Initialize all attributes to prevent None errors
             self.data = {}
-            self.results = {}
+            self.results = {
+                'bet': {},
+                'pores': {},
+                'hysteresis': {}
+            }
             self.material_info = {}
             self.sample_interpretation = {}
             self.research_db = AdvancedResearchDatabase()
@@ -2062,7 +2066,9 @@ class IUPACBETAnalyzer:
                 default_pores['mesoporous_fraction'] /= frac_sum
                 default_pores['macroporous_fraction'] /= frac_sum
     
-            self.results['pores'] = default_pores
+            self.results.setdefault('pores', {})
+            self.results['pores'].update(default_pores)
+
     
         except Exception:
             estimated = self._estimate_pore_properties()
@@ -2188,7 +2194,8 @@ class IUPACBETAnalyzer:
                 'porosity_type': 'Unknown'
             }
 
-        
+       assert results['final_total_volume'] > 0, "Pore volume calculation failed"
+
 
     def _estimate_pore_properties(self):
         """Logical pore property estimation from BET results"""
@@ -4269,6 +4276,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

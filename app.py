@@ -2007,9 +2007,9 @@ class IUPACBETAnalyzer:
         }
 
     def _analyze_pores(self):
-    """
-    Final pore analysis dispatcher (cloud-safe).
-    """
+        """
+        Final pore analysis dispatcher (cloud-safe).
+        """
 
         # ---------- NO PSD → ESTIMATION ----------
         if self.data.get('pore_diameter') is None:
@@ -2071,12 +2071,11 @@ class IUPACBETAnalyzer:
 
 
     def _analyze_pores_complete(self):
-    """
-    Complete pore analysis (cloud-robust, numerically stable).
-    """
+        """
+        Complete pore analysis (cloud-robust, numerically stable).
+        """
         try:
             results = {}
-    
             # ---------- ADSORPTION VOLUME ----------
             Q_ads = self.data.get('Q_ads', [])
             if len(Q_ads) > 0:
@@ -4270,6 +4269,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

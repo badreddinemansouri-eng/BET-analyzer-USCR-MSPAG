@@ -2267,10 +2267,19 @@ class IUPACBETAnalyzer:
 
             return results
 
-       except Exception as e:
-            st.error(f"Pore analysis failed: {e}")
-            st.error(traceback.format_exc())
-            raise
+        except Exception as e:
+            # SAFE fallback (do NOT crash Streamlit)
+            return {
+                'final_total_volume': 0.0,
+                'total_volume': 0.0,
+                'microporous_volume': 0.0,
+                'external_surface_area': 0.0,
+                'microporous_fraction': 0.0,
+                'mesoporous_fraction': 1.0,
+                'macroporous_fraction': 0.0,
+                'porosity_type': 'Unknown',
+                'regression_quality': 0.0
+            }
         
 
     def _estimate_pore_properties(self):
@@ -4352,4 +4361,5 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 

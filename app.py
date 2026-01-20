@@ -2173,7 +2173,7 @@ class IUPACBETAnalyzer:
             results['regression_quality'] = min(
                 0.99, 0.85 + bet.get('r_squared', 0) * 0.1
             )
-           results.setdefault('peak_diameter', 0.0)
+       
             return results
     
         except Exception:
@@ -4269,6 +4269,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

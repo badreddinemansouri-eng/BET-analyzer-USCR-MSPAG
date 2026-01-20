@@ -2114,10 +2114,26 @@ class IUPACBETAnalyzer:
                 pore_diam = self.data['pore_diameter']
                 dV_dlogD = np.abs(self.data['dV_dlogD'])
 
-                valid = (~np.isnan(pore_diam)) & (~np.isnan(dV_dlogD)) & (pore_diam > 0)
+                EPS = 1e-12  # numerical tolerance (DOES NOT change physics)
+
+                valid = (
+                    np.isfinite(pore_diam) &
+                    np.isfinite(dV_dlogD) &
+                    (pore_diam > EPS) &
+                    (dV_dlogD > 0)
+                )
+
                 if np.sum(valid) > 2:
                     log_diam = np.log10(pore_diam[valid])
-                    V_psd = np.trapz(dV_dlogD[valid], log_diam)
+                    dV_valid = dV_dlogD[valid]
+                    
+                    # 🔑 SORT BY DIAMETER (CRITICAL)
+                    order = np.argsort(log_diam)
+                    log_diam = log_diam[order]
+                    dV_valid = dV_valid[order]
+                    
+                    V_psd = np.trapz(dV_valid, log_diam)
+
                     results['total_volume_psd'] = max(0.001, V_psd)
 
             # ============================
@@ -2148,7 +2164,7 @@ class IUPACBETAnalyzer:
             V_psd = results.get('total_volume_psd', 0)
             V_micro = results.get('micropore_volume_DR', 0)
 
-            final_total = max(V_ads, V_psd)
+            final_total = max(V_ads, V_psd, 1e-6)
             if final_total < V_micro:
                 final_total = V_micro * 1.05
 
@@ -2251,19 +2267,11 @@ class IUPACBETAnalyzer:
 
             return results
 
-        except Exception as e:
-            # SAFE fallback (do NOT crash Streamlit)
-            return {
-                'final_total_volume': 0.0,
-                'total_volume': 0.0,
-                'microporous_volume': 0.0,
-                'external_surface_area': 0.0,
-                'microporous_fraction': 0.0,
-                'mesoporous_fraction': 1.0,
-                'macroporous_fraction': 0.0,
-                'porosity_type': 'Unknown',
-                'regression_quality': 0.0
-            }
+       except Exception as e:
+            st.error(f"Pore analysis failed: {e}")
+            st.error(traceback.format_exc())
+            raise
+        
 
     def _estimate_pore_properties(self):
         """Logical pore property estimation from BET results"""
@@ -4344,3 +4352,4 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+

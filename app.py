@@ -2074,8 +2074,6 @@ class IUPACBETAnalyzer:
             estimated = self._estimate_pore_properties()
             estimated['data_quality'] = 'Fallback (analysis error)'
             self.results['pores'] = estimated
-st.write("DEBUG PORE RESULTS:", self.results['pores'])
-
 
     def _analyze_pores_complete(self):
         """
@@ -4272,6 +4270,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

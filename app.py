@@ -2194,7 +2194,7 @@ class IUPACBETAnalyzer:
                 'porosity_type': 'Unknown'
             }
 
-       assert results['final_total_volume'] > 0, "Pore volume calculation failed"
+            assert results['final_total_volume'] > 0, "Pore volume calculation failed"
 
 
     def _estimate_pore_properties(self):
@@ -4276,6 +4276,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

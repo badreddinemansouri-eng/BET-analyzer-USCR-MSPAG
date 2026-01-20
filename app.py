@@ -1928,7 +1928,13 @@ class IUPACBETAnalyzer:
     
             # BET Analysis
             self._perform_bet_analysis(bet_range)
-    
+    # 🔒 CLOUD-SAFE BET VALIDATION (MANDATORY)
+            bet = self.results.get('bet', {})
+            if not bet or bet.get('Q_m', 0) <= 0 or bet.get('S_BET', 0) <= 0:
+                st.error("❌ BET analysis invalid — pore and hysteresis analysis skipped")
+                self.results['pores'] = self._estimate_pore_properties()
+                return
+
             # ============================
             # ✅ FIXED PORE ANALYSIS LOGIC
             # ============================
@@ -2105,13 +2111,16 @@ class IUPACBETAnalyzer:
         # Micropore volume (DR)
         bet = self.results.get('bet', {})
         Q_m = bet.get('Q_m', 0)
+
         if Q_m > 0:
-            results['micropore_volume_DR'] = Q_m * 0.001546 * 0.8
+            results['micropore_volume_DR'] = max(0.001, Q_m * 0.001546 * 0.8)
+        else:
+            results['micropore_volume_DR'] = 0.0
     
         # External surface area
         S_BET = bet.get('S_BET', 0)
         if S_BET > 0:
-            C = bet.get('C', 0)
+            C = bet.get('C', 0) if bet.get('C', 0) > 0 else 100
             results['external_surface_area'] = (
                 S_BET * 0.9 if C < 50 else S_BET * 0.3 if C > 200 else S_BET * 0.6
             )
@@ -2324,18 +2333,17 @@ class IUPACBETAnalyzer:
 
     def _analyze_hysteresis(self):
         """RELIABLE hysteresis analysis with proper error handling"""
+        if len(self.data.get('Q_des', [])) < 10:
+            self.results['hysteresis'] = {
+                'type': 'No reliable hysteresis (insufficient desorption)',
+                'index': 0,
+                'closure_point': 0,
+                'loop_area': 0,
+                'quality': 'Insufficient data'
+            }
+            return
         try:
-            if len(self.data.get('Q_des', [])) < 5:
-                self.results['hysteresis'] = {
-                    'type': 'No desorption data',
-                    'index': 0,
-                    'closure_point': 0,
-                    'loop_area': 0,
-                    'quality': 'No data',
-                    'classification_method': 'Insufficient data'
-                }
-                return
-    
+
             p_ads, Q_ads = self.data['p_rel_ads'], self.data['Q_ads']
             p_des, Q_des = self.data['p_rel_des'], self.data['Q_des']
     
@@ -4232,6 +4240,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

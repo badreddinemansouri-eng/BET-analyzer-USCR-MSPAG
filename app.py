@@ -2074,6 +2074,7 @@ class IUPACBETAnalyzer:
             estimated = self._estimate_pore_properties()
             estimated['data_quality'] = 'Fallback (analysis error)'
             self.results['pores'] = estimated
+st.write("DEBUG PORE RESULTS:", self.results['pores'])
 
 
     def _analyze_pores_complete(self):
@@ -2813,16 +2814,11 @@ Status: {compliance_status}'''
             # ============================
         # 🔒 SAFETY LAYER FOR UI
         # ============================
-        pore_info = self.results.get('pores', {})
+        pore_info = self.results.get('pores')
 
-        pore_info.setdefault('microporous_fraction', 0.0)
-        pore_info.setdefault('mesoporous_fraction', 0.0)
-        pore_info.setdefault('macroporous_fraction', 0.0)
+        if not pore_info or pore_info.get('total_volume', 0) <= 0:
+            return None
 
-        pore_info.setdefault('total_volume', 0.0)
-
-        # Write back to results (CRITICAL)
-        self.results['pores'] = pore_info
 
         """Create publication-quality pore distribution plot following IUPAC standards"""
         if 'pore_diameter' not in self.data or self.data['pore_diameter'] is None:
@@ -4276,6 +4272,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

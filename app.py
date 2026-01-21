@@ -1924,6 +1924,81 @@ class IUPACBETAnalyzer:
                         continue
     
         return 0.1  # Default reasonable mass
+    def _auto_select_bet_range(self, p_rel, Q_ads):
+        """
+        Automatic BET range selection following Rouquerol consistency principles
+        (simplified but physically correct)
+        """
+    
+        valid_ranges = []
+    
+        for p_min in np.arange(0.03, 0.10, 0.01):
+            for p_max in np.arange(0.20, 0.35, 0.02):
+                mask = (p_rel >= p_min) & (p_rel <= p_max)
+                if np.sum(mask) < 4:
+                    continue
+    
+                p = p_rel[mask]
+                q = Q_ads[mask]
+    
+                try:
+                    y = 1 / (q * (1/p - 1))
+                    slope, intercept, r, _, _ = stats.linregress(p, y)
+    
+                    if slope <= 0 or intercept <= 0:
+                        continue
+    
+                    Qm = 1 / (slope + intercept)
+                    C = slope / intercept + 1
+    
+                    # Rouquerol conditions (CORE)
+                    if Qm > 0 and C > 1 and r**2 > 0.995:
+                        valid_ranges.append((p_min, p_max, r**2))
+    
+                except:
+                    continue
+    
+        if not valid_ranges:
+            return (0.05, 0.30)  # safe fallback
+    
+        # Choose the most linear range
+        best = max(valid_ranges, key=lambda x: x[2])
+        return (best[0], best[1])
+    def _t_plot_analysis(self):
+        """
+        True t-plot analysis using Harkins–Jura thickness equation
+        Returns:
+            micropore_volume (cm³/g)
+            external_surface_area (m²/g)
+        """
+    
+        p = self.data['p_rel_ads']
+        q = self.data['Q_ads']
+    
+        # Harkins–Jura thickness (nm)
+        t = (13.99 / (0.034 - np.log10(p)))**0.5 * 0.1
+    
+        # Linear region (t > 0.35 nm → mesopore filling)
+        mask = (t > 0.35) & (t < 0.8)
+        if np.sum(mask) < 4:
+            return 0.0, 0.0
+    
+        t_lin = t[mask]
+        q_lin = q[mask]
+    
+        slope, intercept, r, _, _ = stats.linregress(t_lin, q_lin)
+    
+        if slope <= 0:
+            return 0.0, 0.0
+    
+        # External surface area (m²/g)
+        S_ext = slope * 15.47
+    
+        # Micropore volume (cm³/g)
+        V_micro = intercept * 0.001546
+    
+        return max(V_micro, 0), max(S_ext, 0)
+
 
     def perform_comprehensive_analysis(self, bet_range=(0.05, 0.3)):
         """LOGICAL ANALYSIS: Handle missing data gracefully with morphology prediction"""
@@ -1933,7 +2008,15 @@ class IUPACBETAnalyzer:
                 return
     
             # BET Analysis
-            self._perform_bet_analysis(bet_range)
+            # 🔬 Automatic BET range selection (Rouquerol-inspired)
+            auto_range = self._auto_select_bet_range(
+                self.data['p_rel_ads'],
+                self.data['Q_ads']
+            )
+            
+            self._perform_bet_analysis(auto_range)
+
+
     # 🔒 CLOUD-SAFE BET VALIDATION (MANDATORY)
             bet = self.results.get('bet', {})
             if not bet or bet.get('Q_m', 0) <= 0 or bet.get('S_BET', 0) <= 0:
@@ -2000,7 +2083,10 @@ class IUPACBETAnalyzer:
         # Calculate parameters with error propagation
         Q_m = 1 / (slope + intercept)
         C = slope / intercept + 1
-        
+        # 🔒 PHYSICAL VALIDITY CHECK (MANDATORY)
+        if intercept <= 0 or slope <= 0 or Q_m <= 0 or not np.isfinite(C):
+            raise ValueError("Invalid BET regression (non-physical parameters)")
+
         # Surface area calculation (IUPAC standard)
         N_A = 6.022e23
         sigma = 16.2e-20  # N2 cross-sectional area
@@ -2131,7 +2217,18 @@ class IUPACBETAnalyzer:
             results['micropore_volume_DR'] = 0.0
     
         # External surface area
-        S_BET = bet.get('S_BET', 0)
+        # ============================
+        # TRUE t-PLOT ANALYSIS
+        # ============================
+        V_micro_t, S_ext_t = self._t_plot_analysis()
+        
+        results['micropore_volume_DR'] = max(
+            results.get('micropore_volume_DR', 0),
+            V_micro_t
+        )
+        
+        results['external_surface_area'] = S_ext_t
+
         if S_BET > 0:
             C = bet.get('C', 0) if bet.get('C', 0) > 0 else 100
             results['external_surface_area'] = (
@@ -2175,6 +2272,11 @@ class IUPACBETAnalyzer:
         results['microporous_volume'] = V_micro
         results['microporous_volume'] = results.get('micropore_volume_DR', 0.0)
         return self._normalize_pores(results)
+        results['calculation_methods'] = {
+            'adsorption_method': results.get('total_volume_adsorption', 0),
+            'psd_integration': results.get('total_volume_psd', 0),
+            'DR_micropore': results.get('micropore_volume_DR', 0)
+        }
 
         return results
 
@@ -4286,6 +4388,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

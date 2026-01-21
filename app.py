@@ -1829,8 +1829,14 @@ class IUPACBETAnalyzer:
                 'Q_ads': np.array(Q_ads_values),
                 'p_rel_des': np.array(p_rel_des_values),
                 'Q_des': np.array(Q_des_values),
-                'pore_diameter': np.array(pore_diameter_values) if len(pore_diameter_values) > 0 else None,
-                'dV_dlogD': np.array(dV_dlogD_values) if len(dV_dlogD_values) > 0 else None,
+                'pore_diameter': (
+                    np.asarray(pore_diameter_values, dtype=np.float64)
+                    if len(pore_diameter_values) > 0 else None
+                ),
+                'dV_dlogD': (
+                    np.asarray(dV_dlogD_values, dtype=np.float64)
+                    if len(dV_dlogD_values) > 0 else None
+                ),
                 'sample_id': sample_id,
                 'sample_mass': sample_mass,
                 'adsorptive': 'N₂',
@@ -4240,6 +4246,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

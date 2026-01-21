@@ -1966,27 +1966,30 @@ class IUPACBETAnalyzer:
         return (best[0], best[1])
     def _t_plot_analysis(self):
         """
-        True t-plot analysis using Harkins–Jura thickness equation
-        Returns:
-            micropore_volume (cm³/g)
-            external_surface_area (m²/g)
+        Correct t-plot for N₂ (77 K) using Harkins–Jura thickness
         """
     
-        p = self.data['p_rel_ads']
-        q = self.data['Q_ads']
+        p = np.asarray(self.data['p_rel_ads'], dtype=float)
+        q = np.asarray(self.data['Q_ads'], dtype=float)
+    
+        # SAFETY
+        valid = (p > 0.01) & (p < 0.9) & (q > 0)
+        p = p[valid]
+        q = q[valid]
+    
+        if len(p) < 6:
+            return 0.0, 0.0
     
         # Harkins–Jura thickness (nm)
         t = (13.99 / (0.034 - np.log10(p)))**0.5 * 0.1
     
-        # Linear region (t > 0.35 nm → mesopore filling)
-        mask = (t > 0.35) & (t < 0.8)
+        # ✅ CORRECT linear region for N₂
+        mask = (t > 0.20) & (t < 0.45)
+    
         if np.sum(mask) < 4:
             return 0.0, 0.0
     
-        t_lin = t[mask]
-        q_lin = q[mask]
-    
-        slope, intercept, r, _, _ = stats.linregress(t_lin, q_lin)
+        slope, intercept, r, _, _ = stats.linregress(t[mask], q[mask])
     
         if slope <= 0:
             return 0.0, 0.0
@@ -1997,7 +2000,8 @@ class IUPACBETAnalyzer:
         # Micropore volume (cm³/g)
         V_micro = intercept * 0.001546
     
-        return max(V_micro, 0), max(S_ext, 0)
+        return max(V_micro, 0.0), max(S_ext, 0.0)
+
 
 
     def perform_comprehensive_analysis(self, bet_range=(0.05, 0.3)):
@@ -2191,7 +2195,9 @@ class IUPACBETAnalyzer:
         Complete pore analysis (cloud-robust, numerically stable).
         """
         results = {}
-    
+        bet = self.results.get('bet', {})
+        S_BET = bet.get('S_BET', 0)
+
         # Adsorption pore volume
         Q_ads = self.data.get('Q_ads', [])
         if len(Q_ads) > 0:
@@ -2229,11 +2235,7 @@ class IUPACBETAnalyzer:
         
         results['external_surface_area'] = S_ext_t
 
-        if S_BET > 0:
-            C = bet.get('C', 0) if bet.get('C', 0) > 0 else 100
-            results['external_surface_area'] = (
-                S_BET * 0.9 if C < 50 else S_BET * 0.3 if C > 200 else S_BET * 0.6
-            )
+        
     
         # FINAL TOTAL VOLUME (FIXED)
         volumes = [
@@ -2271,13 +2273,14 @@ class IUPACBETAnalyzer:
 
         results['microporous_volume'] = V_micro
         results['microporous_volume'] = results.get('micropore_volume_DR', 0.0)
-        return self._normalize_pores(results)
+        results['external_surface_area'] = results.get('external_surface_area', 0.0)
+        
         results['calculation_methods'] = {
             'adsorption_method': results.get('total_volume_adsorption', 0),
             'psd_integration': results.get('total_volume_psd', 0),
             'DR_micropore': results.get('micropore_volume_DR', 0)
         }
-
+        
         return results
 
 
@@ -4388,6 +4391,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

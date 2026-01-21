@@ -2028,6 +2028,10 @@ class IUPACBETAnalyzer:
         """
         Final pore analysis dispatcher (cloud-safe).
         """
+        bet = self.results.get('bet', {})
+        if bet.get('Q_m', 0) <= 0 or bet.get('S_BET', 0) <= 0:
+            st.warning("BET not finalized yet — delaying pore analysis")
+            return
 
         if not self.results.get("bet"):
             st.error("❌ BET results missing — pore analysis skipped")
@@ -2084,8 +2088,7 @@ class IUPACBETAnalyzer:
                 default_pores['mesoporous_fraction'] /= frac_sum
                 default_pores['macroporous_fraction'] /= frac_sum
     
-            self.results.setdefault('pores', {})
-            self.results['pores'].update(default_pores)
+            self.results['pores'] = default_pores
 
     
         except Exception:
@@ -2150,7 +2153,7 @@ class IUPACBETAnalyzer:
     
         # Diameters
         if pore_diam is not None and dV_dlogD is not None:
-            pore_nm = pore_diam / 10
+            pore_nm = pore_diam.copy()
             weights = np.abs(dV_dlogD)
             valid = (pore_nm > 0) & (weights > 0)
             if np.sum(valid) > 1:
@@ -2163,8 +2166,11 @@ class IUPACBETAnalyzer:
             else "Micro-Mesoporous" if results['microporous_fraction'] > 0.3
             else "Mesoporous/Macroporous"
         )
-    
+        results['pore_size_distribution'] = results['porosity_type']
+
         results['microporous_volume'] = V_micro
+        results['microporous_volume'] = results.get('micropore_volume_DR', 0.0)
+
         return results
 
 
@@ -2339,6 +2345,16 @@ class IUPACBETAnalyzer:
 
     def _analyze_hysteresis(self):
         """RELIABLE hysteresis analysis with proper error handling"""
+        if self.results.get('pores', {}).get('porosity_type') == 'Unknown':
+            self.results['hysteresis'] = {
+                'type': 'Indeterminate (pore classification incomplete)',
+                'index': 0,
+                'closure_point': 0,
+                'loop_area': 0,
+                'quality': 'Not classified'
+            }
+            return
+
         if len(self.data.get('Q_des', [])) < 10:
             self.results['hysteresis'] = {
                 'type': 'No reliable hysteresis (insufficient desorption)',
@@ -4246,6 +4262,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

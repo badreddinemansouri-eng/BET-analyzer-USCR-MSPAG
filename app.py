@@ -1949,7 +1949,8 @@ class IUPACBETAnalyzer:
             else:
                 estimated = self._estimate_pore_properties()
                 estimated['data_quality'] = 'Estimated (no PSD data)'
-                self.results['pores'] = estimated   # ✅ SAFE ASSIGNMENT
+                self.results['pores'] = self._normalize_pores(estimated)
+   # ✅ SAFE ASSIGNMENT
     
             # Isotherm classification
             self._classify_isotherm()
@@ -2041,7 +2042,8 @@ class IUPACBETAnalyzer:
         if self.data.get('pore_diameter') is None:
             estimated = self._estimate_pore_properties()
             estimated['data_quality'] = 'Estimated (no PSD data)'
-            self.results['pores'] = estimated
+            self.results['pores'] = self._normalize_pores(estimated)
+
             return
     
         default_pores = {
@@ -2088,13 +2090,15 @@ class IUPACBETAnalyzer:
                 default_pores['mesoporous_fraction'] /= frac_sum
                 default_pores['macroporous_fraction'] /= frac_sum
     
-            self.results['pores'] = default_pores
+            self.results['pores'] = self._normalize_pores(default_pores)
+
 
     
         except Exception:
             estimated = self._estimate_pore_properties()
             estimated['data_quality'] = 'Fallback (analysis error)'
-            self.results['pores'] = estimated
+            self.results['pores'] = self._normalize_pores(estimated)
+
 
     def _analyze_pores_complete(self):
         """
@@ -2170,10 +2174,30 @@ class IUPACBETAnalyzer:
 
         results['microporous_volume'] = V_micro
         results['microporous_volume'] = results.get('micropore_volume_DR', 0.0)
+        return self._normalize_pores(results)
 
         return results
 
 
+    def _normalize_pores(self, pores):
+        return {
+            'total_volume': float(pores.get('total_volume', pores.get('final_total_volume', 0))),
+            'microporous_volume': float(pores.get('microporous_volume', 0)),
+            'external_surface_area': float(pores.get('external_surface_area', 0)),
+            'peak_diameter': float(pores.get('peak_diameter', 0)),
+            'average_diameter': float(pores.get('average_diameter', 0)),
+            'microporous_fraction': float(pores.get('microporous_fraction', 0)),
+            'mesoporous_fraction': float(pores.get('mesoporous_fraction', 0)),
+            'macroporous_fraction': float(pores.get('macroporous_fraction', 0)),
+            'porosity_type': pores.get(
+                'porosity_type',
+                pores.get('pore_size_distribution', 'Unknown')
+            ),
+            'pore_size_distribution': pores.get(
+                'pore_size_distribution',
+                pores.get('porosity_type', 'Unknown')
+            )
+        }
 
     def _estimate_pore_properties(self):
         """Logical pore property estimation from BET results"""
@@ -4262,6 +4286,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

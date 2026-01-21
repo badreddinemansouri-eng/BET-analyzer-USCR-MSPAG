@@ -1830,9 +1830,11 @@ class IUPACBETAnalyzer:
                 'p_rel_des': np.array(p_rel_des_values),
                 'Q_des': np.array(Q_des_values),
                 'pore_diameter': (
-                    np.asarray(pore_diameter_values, dtype=np.float64)
+                    np.asarray(pore_diameter_values, dtype=np.float64) * 0.1  # Å → nm
                     if len(pore_diameter_values) > 0 else None
                 ),
+                'pore_diameter_unit': 'nm',
+
                 'dV_dlogD': (
                     np.asarray(dV_dlogD_values, dtype=np.float64)
                     if len(dV_dlogD_values) > 0 else None
@@ -2888,8 +2890,18 @@ class IUPACBETAnalyzer:
 
     def create_bet_plot(self):
         """Create publication-quality BET plot following IUPAC standards"""
-        if 'bet' not in self.results:
+
+        bet_data = self.results.get('bet')
+    
+        # 🔒 HARD SAFETY CHECK
+        if (
+            not bet_data or
+            'x_bet' not in bet_data or
+            'y_bet' not in bet_data or
+            len(bet_data['x_bet']) < 2
+        ):
             return None
+
             
         fig, ax = plt.subplots(figsize=(10, 8))
         
@@ -2949,7 +2961,7 @@ Status: {compliance_status}'''
         dV_dlogD = self.data['dV_dlogD']
     
         # Convert to nm for plotting
-        pore_diam_nm = pore_diam / 10
+        pore_diam_nm = pore_diam 
     
         # =========================
         # Publication-style PSD plot (DESIGN ONLY)
@@ -4391,6 +4403,7 @@ def display_ultra_hd_analysis_results(analyzer):
 
 if __name__ == "__main__":
     main()
+
 
 
 

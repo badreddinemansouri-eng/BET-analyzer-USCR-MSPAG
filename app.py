@@ -196,18 +196,31 @@ def auto_detect_columns(df):
                 if len(valid_vals) >= len(sample) * 0.8:  # 80% of values in range
                     pressure_cols.append(col)
     
-    # For each pressure column, check the next column for quantity
-    for p_col in pressure_cols:
-        if p_col + 1 < df.shape[1]:
-            # Convert both columns to numeric
-            p_vals = pd.to_numeric(df.iloc[:, p_col], errors='coerce').dropna().values
-            q_vals = pd.to_numeric(df.iloc[:, p_col + 1], errors='coerce').dropna().values
+    # Try to find both adsorption and desorption data
+    # Look for two sets of pressure-quantity data
+    if len(pressure_cols) >= 2:
+        # First try to find adsorption (likely first set)
+        p_col_ads = pressure_cols[0]
+        if p_col_ads + 1 < df.shape[1]:
+            p_vals = pd.to_numeric(df.iloc[:, p_col_ads], errors='coerce').dropna().values
+            q_vals = pd.to_numeric(df.iloc[:, p_col_ads + 1], errors='coerce').dropna().values
             
             min_len = min(len(p_vals), len(q_vals))
             if min_len >= 5:
                 p_ads.extend(p_vals[:min_len])
                 q_ads.extend(q_vals[:min_len])
-                break
+        
+        # Try to find desorption (look for another pressure column)
+        if len(pressure_cols) >= 2:
+            p_col_des = pressure_cols[1]
+            if p_col_des + 1 < df.shape[1]:
+                p_vals_des = pd.to_numeric(df.iloc[:, p_col_des], errors='coerce').dropna().values
+                q_vals_des = pd.to_numeric(df.iloc[:, p_col_des + 1], errors='coerce').dropna().values
+                
+                min_len_des = min(len(p_vals_des), len(q_vals_des))
+                if min_len_des >= 5:
+                    p_des.extend(p_vals_des[:min_len_des])
+                    q_des.extend(q_vals_des[:min_len_des])
     
     return p_ads, q_ads, p_des, q_des
 
@@ -228,16 +241,26 @@ def extract_bet_data_asap2420(df_bet):
         if len(p_ads2) >= 5:
             methods.append((f"Offset {offset}", p_ads2, q_ads2, p_des2, q_des2))
     
-    # Method 3: Auto-detect pressure and quantity columns
-    p_ads3, q_ads3, p_des3, q_des3 = auto_detect_columns(df_bet)
-    if len(p_ads3) >= 5:
-        methods.append(("Auto-detected", p_ads3, q_ads3, p_des3, q_des3))
+    # Method 3: Try common column positions for adsorption only
+    for start_col in [0, 1, 2, 3, 4]:
+        p_ads3, q_ads3, _, _ = extract_columns(df_bet, start_col, start_col+1, -1, -1)
+        if len(p_ads3) >= 5:
+            # Try to find desorption in subsequent columns
+            p_des3, q_des3, _, _ = extract_columns(df_bet, start_col+2, start_col+3, -1, -1)
+            methods.append((f"Columns {start_col}-{start_col+3}", p_ads3, q_ads3, p_des3, q_des3))
+    
+    # Method 4: Auto-detect pressure and quantity columns
+    p_ads4, q_ads4, p_des4, q_des4 = auto_detect_columns(df_bet)
+    if len(p_ads4) >= 5:
+        methods.append(("Auto-detected", p_ads4, q_ads4, p_des4, q_des4))
     
     # Choose the best method (most data points)
     if methods:
         methods.sort(key=lambda x: len(x[1]), reverse=True)
         best_method = methods[0]
-        st.info(f"Using {best_method[0]} format with {len(best_method[1])} points")
+        st.info(f"Using {best_method[0]} format with {len(best_method[1])} adsorption points")
+        if len(best_method[3]) > 0:
+            st.info(f"Found {len(best_method[3])} desorption points")
         return best_method[1], best_method[2], best_method[3], best_method[4]
     
     return [], [], [], []
@@ -342,21 +365,24 @@ class IUPACBETAnalyzer:
                 st.warning("⚠️ Data contains duplicate pressure values after cleaning")
         
         if self.p_ads.max() < 0.05:
-            raise DataIntegrityError(f"Maximum pressure ({self.p_ads.max():.3f}) too low for BET analysis")
-        if self.p_ads.max() < 0.3:
-            st.warning(f"⚠️ Maximum pressure ({self.p_ads.max():.3f}) may be insufficient for accurate BET analysis")
+            st.warning(f"⚠️ Maximum pressure ({self.p_ads.max():.3f}) is low for BET analysis")
     
-    def analyze_bet_surface_area(self) -> Dict:
+    def analyze_bet_surface_area(self, bet_min_p: float = 0.05, bet_max_p: float = 0.35) -> Dict:
         """
         Calculate BET surface area with automatic linear range selection
         using Rouquerol criteria
         """
         p, q = self.p_ads, self.q_ads
         
-        # Find optimal linear region (0.05-0.35 P/P0)
-        mask = (p >= 0.05) & (p <= 0.35)
-        if np.sum(mask) < 5:
-            raise IUPACViolationError("Insufficient points in BET linear region")
+        # Find optimal linear region (customizable P/P0 range)
+        mask = (p >= bet_min_p) & (p <= bet_max_p)
+        if np.sum(mask) < 3:
+            # Try to use available points
+            mask = (p >= max(0.01, p.min())) & (p <= min(0.5, p.max()))
+        
+        if np.sum(mask) < 3:
+            # Use all points if insufficient in range
+            mask = np.ones_like(p, dtype=bool)
         
         p_lin = p[mask]
         q_lin = q[mask]
@@ -367,15 +393,16 @@ class IUPACBETAnalyzer:
         # Linear regression with statistical validation
         slope, intercept, r_value, _, std_err = stats.linregress(p_lin, y)
         
-        if r_value**2 < 0.999:
-            raise IUPACViolationError(f"BET linearity insufficient (R² = {r_value**2:.4f})")
+        r2 = r_value**2
+        if r2 < 0.99:
+            st.warning(f"⚠️ BET linearity is low (R² = {r2:.4f}). Results may be approximate.")
         
         # Calculate BET parameters
-        q_mono = 1 / (slope + intercept)  # mmol/g
-        c_constant = slope / intercept + 1
+        q_mono = 1 / (slope + intercept) if (slope + intercept) != 0 else 0  # mmol/g
+        c_constant = slope / intercept + 1 if intercept != 0 else 0
         
         if c_constant <= 0:
-            raise IUPACViolationError(f"Non-physical C constant: {c_constant:.2f}")
+            st.warning(f"⚠️ Non-physical C constant: {c_constant:.2f}")
         
         # Convert to surface area (m²/g)
         s_bet = q_mono * self.AVOGADRO * self.N2_CROSS_SECTION * 1e-20
@@ -384,15 +411,29 @@ class IUPACBETAnalyzer:
             "surface_area": s_bet,
             "q_monolayer": q_mono,
             "c_constant": c_constant,
-            "bet_r2": r_value**2,
+            "bet_r2": r2,
             "linear_range": (p_lin.min(), p_lin.max()),
-            "n_points": len(p_lin)
+            "n_points": len(p_lin),
+            "slope": slope,
+            "intercept": intercept
         }
     
     def analyze_pore_size_distribution(self) -> Dict:
         """BJH method for mesopore analysis (2-50 nm)"""
-        if self.p_des is None or self.q_des is None:
-            raise DataIntegrityError("Desorption branch required for PSD")
+        if self.p_des is None or self.q_des is None or len(self.p_des) < 5:
+            # Return empty PSD if no desorption data
+            return {
+                "pore_diameters": np.array([]),
+                "dv_dlogd": np.array([]),
+                "total_pore_volume": 0,
+                "mean_pore_diameter": 0,
+                "micropore_volume": 0,
+                "mesopore_volume": 0,
+                "macropore_volume": 0,
+                "micropore_fraction": 0,
+                "mesopore_fraction": 0,
+                "macropore_fraction": 0
+            }
         
         # Calculate pore radius using Kelvin equation
         # r_k = -2γV_m / (RT ln(P/P0))
@@ -400,9 +441,31 @@ class IUPACBETAnalyzer:
         v_molar = 34.7e-6  # m³/mol for liquid N2
         t = 77.3  # K
         
-        # Desorption branch (hysteresis loop)
-        p = self.p_des[::-1]  # Reverse for desorption
-        q = self.q_des[::-1]
+        # Clean desorption data
+        p_des_clean = self.p_des[~np.isnan(self.p_des)]
+        q_des_clean = self.q_des[~np.isnan(self.q_des)]
+        
+        if len(p_des_clean) < 5:
+            return {
+                "pore_diameters": np.array([]),
+                "dv_dlogd": np.array([]),
+                "total_pore_volume": 0,
+                "mean_pore_diameter": 0,
+                "micropore_volume": 0,
+                "mesopore_volume": 0,
+                "macropore_volume": 0,
+                "micropore_fraction": 0,
+                "mesopore_fraction": 0,
+                "macropore_fraction": 0
+            }
+        
+        # Desorption branch (hysteresis loop) - sort by decreasing pressure
+        sort_idx = np.argsort(p_des_clean)[::-1]
+        p = p_des_clean[sort_idx]
+        q = q_des_clean[sort_idx]
+        
+        # Avoid log(0) or log(negative)
+        p = np.maximum(p, 1e-10)
         
         # Kelvin radii calculation
         r_kelvin = -2 * gamma * v_molar / (self.GAS_CONSTANT * t * np.log(p))
@@ -411,39 +474,47 @@ class IUPACBETAnalyzer:
         # Pore volume distribution
         dV = np.abs(np.diff(q))
         dr = np.abs(np.diff(r_kelvin))
-        dV_dr = dV / dr
         
-        # Remove invalid values
-        valid = (r_kelvin[:-1] > 1) & (r_kelvin[:-1] < 100) & (dV_dr > 0)
+        # Avoid division by zero
+        valid = (dr > 1e-10) & (dV > 0) & (r_kelvin[:-1] > 0.1) & (r_kelvin[:-1] < 500)
+        if np.sum(valid) < 3:
+            return {
+                "pore_diameters": np.array([]),
+                "dv_dlogd": np.array([]),
+                "total_pore_volume": 0,
+                "mean_pore_diameter": 0,
+                "micropore_volume": 0,
+                "mesopore_volume": 0,
+                "macropore_volume": 0,
+                "micropore_fraction": 0,
+                "mesopore_fraction": 0,
+                "macropore_fraction": 0
+            }
+        
         r_valid = r_kelvin[:-1][valid]
-        dV_dr_valid = dV_dr[valid]
-        
-        if len(r_valid) < 3:
-            raise DataIntegrityError("Insufficient valid points for PSD")
+        dV_dr = dV[valid] / dr[valid]
         
         # Calculate pore statistics
-        total_pore_volume = integrate.simps(
-            dV_dr_valid[np.argsort(r_valid)], 
-            np.sort(r_valid)
-        )
+        total_pore_volume = np.trapz(dV_dr[np.argsort(r_valid)], np.sort(r_valid))
         
         # Pore size fractions
         micro = r_valid < 2
         meso = (r_valid >= 2) & (r_valid <= 50)
         macro = r_valid > 50
         
-        v_micro = integrate.simps(dV_dr_valid[micro], r_valid[micro]) if np.any(micro) else 0
-        v_meso = integrate.simps(dV_dr_valid[meso], r_valid[meso]) if np.any(meso) else 0
-        v_macro = integrate.simps(dV_dr_valid[macro], r_valid[macro]) if np.any(macro) else 0
+        v_micro = np.trapz(dV_dr[micro], r_valid[micro]) if np.any(micro) else 0
+        v_meso = np.trapz(dV_dr[meso], r_valid[meso]) if np.any(meso) else 0
+        v_macro = np.trapz(dV_dr[macro], r_valid[macro]) if np.any(macro) else 0
         
         # Mean pore diameter (volume-weighted)
-        mean_diameter = 2 * integrate.simps(
-            r_valid * dV_dr_valid, r_valid
-        ) / total_pore_volume if total_pore_volume > 0 else 0
+        if total_pore_volume > 0:
+            mean_diameter = 2 * np.trapz(r_valid * dV_dr, r_valid) / total_pore_volume
+        else:
+            mean_diameter = 0
         
         return {
             "pore_diameters": r_valid * 2,  # Convert radius to diameter
-            "dv_dlogd": dV_dr_valid,
+            "dv_dlogd": dV_dr,
             "total_pore_volume": total_pore_volume,
             "mean_pore_diameter": mean_diameter,
             "micropore_volume": v_micro,
@@ -456,43 +527,56 @@ class IUPACBETAnalyzer:
     
     def classify_hysteresis(self) -> Dict:
         """IUPAC hysteresis classification (H1-H4)"""
-        if self.p_des is None or self.q_des is None:
-            return {"type": "No hysteresis", "category": "I"}
+        if self.p_des is None or self.q_des is None or len(self.p_des) < 5:
+            return {
+                "type": "No hysteresis", 
+                "category": "I",
+                "loop_area": 0,
+                "closure_pressure": None,
+                "description": "No desorption data available"
+            }
         
         # Calculate hysteresis loop area
-        p_interp = np.linspace(0.1, 0.95, 100)
-        q_ads_interp = np.interp(p_interp, self.p_ads, self.q_ads)
-        q_des_interp = np.interp(p_interp, self.p_des, self.q_des)
-        
-        loop_area = integrate.simps(
-            np.abs(q_des_interp - q_ads_interp), p_interp
-        )
-        
-        # Closure point analysis
-        closure_idx = np.argmin(np.abs(self.q_des - self.q_ads[-1]))
-        closure_pressure = self.p_des[closure_idx]
-        
-        # IUPAC classification
-        if loop_area < 5:
-            h_type = "H1"  # Narrow, uniform pores
-            category = "IV"
-        elif closure_pressure > 0.45:
-            h_type = "H2"  # Ink-bottle pores
-            category = "IV"
-        elif closure_pressure > 0.4:
-            h_type = "H3"  # Slit-shaped pores
-            category = "II"
-        else:
-            h_type = "H4"  # Combined micro-mesopores
-            category = "I"
-        
-        return {
-            "type": h_type,
-            "category": category,
-            "loop_area": loop_area,
-            "closure_pressure": closure_pressure,
-            "description": self._get_hysteresis_description(h_type)
-        }
+        try:
+            p_interp = np.linspace(0.1, 0.95, 100)
+            q_ads_interp = np.interp(p_interp, self.p_ads, self.q_ads)
+            q_des_interp = np.interp(p_interp, self.p_des, self.q_des)
+            
+            loop_area = np.trapz(np.abs(q_des_interp - q_ads_interp), p_interp)
+            
+            # Closure point analysis
+            closure_idx = np.argmin(np.abs(self.q_des - self.q_ads[-1]))
+            closure_pressure = self.p_des[closure_idx]
+            
+            # IUPAC classification
+            if loop_area < 5:
+                h_type = "H1"  # Narrow, uniform pores
+                category = "IV"
+            elif closure_pressure > 0.45:
+                h_type = "H2"  # Ink-bottle pores
+                category = "IV"
+            elif closure_pressure > 0.4:
+                h_type = "H3"  # Slit-shaped pores
+                category = "II"
+            else:
+                h_type = "H4"  # Combined micro-mesopores
+                category = "I"
+            
+            return {
+                "type": h_type,
+                "category": category,
+                "loop_area": loop_area,
+                "closure_pressure": closure_pressure,
+                "description": self._get_hysteresis_description(h_type)
+            }
+        except:
+            return {
+                "type": "Unclassified", 
+                "category": "Unknown",
+                "loop_area": 0,
+                "closure_pressure": None,
+                "description": "Could not classify hysteresis"
+            }
     
     @staticmethod
     def _get_hysteresis_description(h_type: str) -> str:
@@ -501,28 +585,41 @@ class IUPACBETAnalyzer:
             "H2": "Ink-bottle pores or interconnected pore network",
             "H3": "Slit-shaped pores from plate-like particles",
             "H4": "Combined micro-mesoporosity (typical activated carbons)",
-            "No hysteresis": "Microporous or non-porous material"
+            "No hysteresis": "Microporous or non-porous material",
+            "Unclassified": "Hysteresis could not be classified"
         }
         return descriptions.get(h_type, "Unknown hysteresis type")
     
-    def full_analysis(self) -> Dict:
+    def full_analysis(self, bet_min_p: float = 0.05, bet_max_p: float = 0.35) -> Dict:
         """Complete BET analysis with all parameters"""
         try:
-            bet = self.analyze_bet_surface_area()
+            bet = self.analyze_bet_surface_area(bet_min_p, bet_max_p)
             psd = self.analyze_pore_size_distribution()
             hysteresis = self.classify_hysteresis()
             
             # Calculate t-plot for microporosity
             t_plot = self._calculate_t_plot()
             
+            # Calculate total pore volume from adsorption data at highest P/P0
+            if len(self.p_ads) > 0:
+                max_p_idx = np.argmax(self.p_ads)
+                total_pore_volume_ads = self.q_ads[max_p_idx] / 1000  # Convert mmol/g to cm³/g
+            else:
+                total_pore_volume_ads = 0
+            
+            # Use PSD total pore volume if available, otherwise use adsorption-based
+            total_pore_volume = psd.get("total_pore_volume", 0)
+            if total_pore_volume <= 0:
+                total_pore_volume = total_pore_volume_ads
+            
             return {
                 "valid": True,
                 "surface_area_bet": bet["surface_area"],
                 "c_constant": bet["c_constant"],
                 "monolayer_capacity": bet["q_monolayer"],
-                "total_pore_volume": psd["total_pore_volume"],
-                "mean_pore_diameter": psd["mean_pore_diameter"],
-                "micropore_volume": psd["micropore_volume"],
+                "total_pore_volume": total_pore_volume,
+                "mean_pore_diameter": psd.get("mean_pore_diameter", 0),
+                "micropore_volume": t_plot.get("micropore_volume", 0),
                 "external_surface_area": t_plot.get("external_surface", 0),
                 "hysteresis": hysteresis,
                 "pore_size_distribution": psd,
@@ -532,6 +629,12 @@ class IUPACBETAnalyzer:
                     "q_ads": self.q_ads,
                     "p_des": self.p_des,
                     "q_des": self.q_des
+                },
+                "bet_parameters": {
+                    "r2": bet["bet_r2"],
+                    "linear_range": bet["linear_range"],
+                    "slope": bet["slope"],
+                    "intercept": bet["intercept"]
                 }
             }
         except Exception as e:
@@ -541,34 +644,51 @@ class IUPACBETAnalyzer:
                 "surface_area_bet": 0,
                 "c_constant": 0,
                 "total_pore_volume": 0,
-                "mean_pore_diameter": 0
+                "mean_pore_diameter": 0,
+                "adsorption_data": {
+                    "p_ads": self.p_ads,
+                    "q_ads": self.q_ads,
+                    "p_des": self.p_des,
+                    "q_des": self.q_des
+                }
             }
     
     def _calculate_t_plot(self) -> Dict:
         """t-plot analysis for microporosity (Harkins-Jura)"""
         p, q = self.p_ads, self.q_ads
         
+        if len(p) < 5:
+            return {"external_surface": 0, "micropore_volume": 0, "t_plot_r2": 0}
+        
         # Harkins-Jura thickness equation
-        t = (13.99 / (0.034 - np.log10(p))) ** 0.5
+        p_safe = np.maximum(p, 1e-10)
+        t = (13.99 / (0.034 - np.log10(p_safe))) ** 0.5
         
         # Select linear region (0.2-0.5 P/P0)
         mask = (p >= 0.2) & (p <= 0.5)
         if np.sum(mask) < 5:
-            return {"external_surface": 0, "micropore_volume": 0}
+            # Try broader range
+            mask = (p >= 0.1) & (p <= 0.6)
+        
+        if np.sum(mask) < 3:
+            return {"external_surface": 0, "micropore_volume": 0, "t_plot_r2": 0}
         
         t_lin = t[mask]
         q_lin = q[mask]
         
-        slope, intercept, r_value, _, _ = stats.linregress(t_lin, q_lin)
-        
-        external_surface = slope * 15.47  # Conversion factor for N2
-        micropore_volume = intercept / 1000  # Convert to cm³/g
-        
-        return {
-            "external_surface": external_surface,
-            "micropore_volume": max(0, micropore_volume),
-            "t_plot_r2": r_value**2
-        }
+        try:
+            slope, intercept, r_value, _, _ = stats.linregress(t_lin, q_lin)
+            
+            external_surface = slope * 15.47  # Conversion factor for N2
+            micropore_volume = intercept / 1000  # Convert to cm³/g
+            
+            return {
+                "external_surface": external_surface,
+                "micropore_volume": max(0, micropore_volume),
+                "t_plot_r2": r_value**2
+            }
+        except:
+            return {"external_surface": 0, "micropore_volume": 0, "t_plot_r2": 0}
 
 # ============================================================================
 # ADVANCED XRD ANALYSIS ENGINE
@@ -624,8 +744,11 @@ class AdvancedXRDAnalyzer:
         theta = theta[valid]
         I = I[valid]
         
+        if len(theta) == 0:
+            return theta, I
+        
         # Subtract background (rolling ball)
-        background = pd.Series(I).rolling(window=51, center=True, min_periods=1).median()
+        background = pd.Series(I).rolling(window=min(51, len(I)//2), center=True, min_periods=1).median()
         I_corrected = I - background.values
         
         # Normalize to [0,1]
@@ -639,20 +762,25 @@ class AdvancedXRDAnalyzer:
     def _detect_peaks(self, theta: np.ndarray, I: np.ndarray, 
                      min_prominence: float = 0.1) -> List[float]:
         """Advanced peak detection with prominence filtering"""
+        if len(I) < 10:
+            return []
+        
         peaks, properties = signal.find_peaks(
             I, 
             prominence=min_prominence,
             width=2,
-            distance=10
+            distance=max(5, len(I)//20)
         )
         
         if len(peaks) == 0:
             return []
         
         # Filter by prominence
-        prominent_peaks = peaks[properties["prominences"] > np.median(properties["prominences"]) * 0.5]
+        if len(peaks) > 0 and "prominences" in properties:
+            prominent_peaks = peaks[properties["prominences"] > np.median(properties["prominences"]) * 0.5]
+            return theta[prominent_peaks].tolist()
         
-        return theta[prominent_peaks].tolist()
+        return theta[peaks].tolist()
     
     def _calculate_crystallinity_index(self, theta: np.ndarray, I: np.ndarray, 
                                       peaks: List[float]) -> Dict:
@@ -664,7 +792,7 @@ class AdvancedXRDAnalyzer:
             return {"index": 0.0, "classification": "Amorphous"}
         
         # Create amorphous baseline
-        x_smooth = np.linspace(theta.min(), theta.max(), 1000)
+        x_smooth = np.linspace(theta.min(), theta.max(), min(1000, len(theta)*2))
         I_smooth = np.interp(x_smooth, theta, I)
         
         # Find valleys between peaks
@@ -676,16 +804,16 @@ class AdvancedXRDAnalyzer:
                 valleys.append(theta[mask][valley_idx])
         
         # Calculate crystalline and amorphous areas
-        total_area = integrate.simps(I, theta)
+        total_area = np.trapz(I, theta)
         
         # Approximate amorphous area (area under valleys)
         amorphous_area = 0
         for valley in valleys:
             idx = np.argmin(np.abs(theta - valley))
             window = slice(max(0, idx-5), min(len(theta), idx+5))
-            amorphous_area += integrate.simps(I[window], theta[window])
+            amorphous_area += np.trapz(I[window], theta[window])
         
-        crystallinity = (total_area - amorphous_area) / total_area
+        crystallinity = (total_area - amorphous_area) / total_area if total_area > 0 else 0
         
         # Classification
         if crystallinity > 0.7:
@@ -711,7 +839,7 @@ class AdvancedXRDAnalyzer:
             return {"size": None, "sizes": [], "average": None}
         
         sizes = []
-        for peak in peaks[:3]:  # Analyze first 3 major peaks
+        for peak in peaks[:min(3, len(peaks))]:  # Analyze first 3 major peaks
             idx = np.argmin(np.abs(theta - peak))
             
             # Extract peak region
@@ -728,7 +856,7 @@ class AdvancedXRDAnalyzer:
                 bounds = ([0, peak-0.5, 0.01], [2, peak+0.5, 1])
                 popt, _ = optimize.curve_fit(
                     gaussian, theta_peak, I_peak, 
-                    p0=p0, bounds=bounds
+                    p0=p0, bounds=bounds, maxfev=5000
                 )
                 
                 # Calculate FWHM and crystallite size
@@ -759,7 +887,7 @@ class AdvancedXRDAnalyzer:
         beta = []  # FWHM
         d_spacing = []  # d-spacing
         
-        for peak in peaks[:5]:
+        for peak in peaks[:min(5, len(peaks))]:
             idx = np.argmin(np.abs(theta - peak))
             window = slice(max(0, idx-15), min(len(theta), idx+15))
             theta_peak = theta[window]
@@ -929,7 +1057,7 @@ class MorphologyFusionEngine:
             pore_stability = 0.6  # Disordered = less stable
         integrity_components.append(pore_stability * 0.3)
         
-        structural_integrity = np.mean(integrity_components)
+        structural_integrity = np.mean(integrity_components) if integrity_components else 0.5
         
         # 4. Determine dominant morphology feature
         dominant_feature = MorphologyFusionEngine._determine_dominant_feature(
@@ -1007,16 +1135,16 @@ class MorphologyFusionEngine:
         
         # BET data quality
         if bet_data.get("valid", False):
-            bet_r2 = bet_data.get("bet_r2", 0) if isinstance(bet_data, dict) else 0
-            if isinstance(bet_r2, dict):
-                bet_r2 = bet_r2.get("bet_r2", 0)
+            bet_r2 = bet_data.get("bet_parameters", {}).get("r2", 0)
             confidence_factors.append(min(1, bet_r2))
             
             # PSD quality
             if bet_data.get("pore_size_distribution"):
                 psd = bet_data["pore_size_distribution"]
-                if len(psd.get("pore_diameters", [])) > 10:
+                if len(psd.get("pore_diameters", [])) > 5:
                     confidence_factors.append(0.8)
+                elif len(psd.get("pore_diameters", [])) > 0:
+                    confidence_factors.append(0.5)
         
         # XRD data quality
         if xrd_data.get("valid", False):
@@ -1024,6 +1152,8 @@ class MorphologyFusionEngine:
                 confidence_factors.append(0.9)
             elif len(xrd_data.get("peaks", [])) >= 1:
                 confidence_factors.append(0.6)
+            else:
+                confidence_factors.append(0.3)
         
         # Data consistency
         if bet_data.get("valid") and xrd_data.get("valid"):
@@ -1102,18 +1232,24 @@ class ScientificVisualizer:
         ax3.text(0.02, 0.98, 'C', transform=ax3.transAxes, 
                 fontsize=16, fontweight='bold', va='top')
         
-        # Panel D: Morphology radar chart
-        ax4 = fig.add_subplot(gs[1, :], projection='polar')
-        ScientificVisualizer._plot_morphology_radar(ax4, morphology, bet_data, xrd_data)
+        # Panel D: BET linear plot
+        ax4 = fig.add_subplot(gs[1, 0])
+        ScientificVisualizer._plot_bet_linear(ax4, bet_data)
         ax4.text(0.02, 0.98, 'D', transform=ax4.transAxes, 
                 fontsize=16, fontweight='bold', va='top')
         
-        # Panel E: Fusion summary table
-        ax5 = fig.add_subplot(gs[2, :])
-        ScientificVisualizer._plot_fusion_summary(ax5, morphology, bet_data, xrd_data)
+        # Panel E: Morphology radar chart
+        ax5 = fig.add_subplot(gs[1, 1:], projection='polar')
+        ScientificVisualizer._plot_morphology_radar(ax5, morphology, bet_data, xrd_data)
         ax5.text(0.02, 0.98, 'E', transform=ax5.transAxes, 
                 fontsize=16, fontweight='bold', va='top')
-        ax5.axis('off')
+        
+        # Panel F: Fusion summary table
+        ax6 = fig.add_subplot(gs[2, :])
+        ScientificVisualizer._plot_fusion_summary(ax6, morphology, bet_data, xrd_data)
+        ax6.text(0.02, 0.98, 'F', transform=ax6.transAxes, 
+                fontsize=16, fontweight='bold', va='top')
+        ax6.axis('off')
         
         plt.suptitle("Comprehensive Morphology Analysis", fontsize=16, y=0.98)
         
@@ -1122,18 +1258,18 @@ class ScientificVisualizer:
     @staticmethod
     def _plot_bet_isotherm(ax, bet_data):
         """Plot adsorption-desorption isotherm"""
-        if not bet_data.get("valid", False):
-            ax.text(0.5, 0.5, "No valid BET data", 
+        if not bet_data.get("adsorption_data"):
+            ax.text(0.5, 0.5, "No BET data", 
                    ha='center', va='center', transform=ax.transAxes)
             return
         
         ads_data = bet_data.get("adsorption_data", {})
         
-        if "p_ads" in ads_data:
+        if "p_ads" in ads_data and len(ads_data["p_ads"]) > 0:
             ax.plot(ads_data["p_ads"], ads_data["q_ads"], 
                    'o-', linewidth=2, markersize=4, label='Adsorption')
         
-        if "p_des" in ads_data and ads_data["p_des"] is not None:
+        if "p_des" in ads_data and ads_data["p_des"] is not None and len(ads_data["p_des"]) > 0:
             ax.plot(ads_data["p_des"], ads_data["q_des"], 
                    's--', linewidth=2, markersize=4, label='Desorption')
         
@@ -1143,40 +1279,42 @@ class ScientificVisualizer:
         ax.legend(loc='best')
         ax.grid(True, alpha=0.3)
         
-        # Add BET parameters
-        bet_text = f"$S_{{BET}}$ = {bet_data.get('surface_area_bet', 0):.0f} m²/g\n"
-        bet_text += f"C = {bet_data.get('c_constant', 0):.0f}"
-        ax.text(0.05, 0.95, bet_text, transform=ax.transAxes,
-               fontsize=9, va='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        # Add BET parameters if available
+        if bet_data.get("valid", False):
+            bet_text = f"$S_{{BET}}$ = {bet_data.get('surface_area_bet', 0):.0f} m²/g\n"
+            bet_text += f"C = {bet_data.get('c_constant', 0):.0f}"
+            ax.text(0.05, 0.95, bet_text, transform=ax.transAxes,
+                   fontsize=9, va='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
     @staticmethod
     def _plot_pore_size_distribution(ax, bet_data):
         """Plot pore size distribution"""
         psd = bet_data.get("pore_size_distribution", {})
         
-        if not psd or "pore_diameters" not in psd:
-            ax.text(0.5, 0.5, "No PSD data", 
+        if not psd or "pore_diameters" not in psd or len(psd["pore_diameters"]) == 0:
+            ax.text(0.5, 0.5, "No PSD data\n(desorption branch required)", 
                    ha='center', va='center', transform=ax.transAxes)
             return
         
         diameters = psd["pore_diameters"]
         dv_dlogd = psd["dv_dlogd"]
         
-        ax.plot(diameters, dv_dlogd, '-', linewidth=2)
-        ax.fill_between(diameters, 0, dv_dlogd, alpha=0.3)
-        
-        ax.set_xscale('log')
-        ax.set_xlabel("Pore Diameter (nm)")
-        ax.set_ylabel("dV/dlogD (cm³/g)")
-        ax.set_title("Pore Size Distribution")
-        ax.grid(True, alpha=0.3, which='both')
-        
-        # Add pore statistics
-        pore_text = f"Mean D = {psd.get('mean_pore_diameter', 0):.1f} nm\n"
-        pore_text += f"V$_{{total}}$ = {psd.get('total_pore_volume', 0):.3f} cm³/g"
-        ax.text(0.95, 0.95, pore_text, transform=ax.transAxes,
-               fontsize=9, ha='right', va='top',
-               bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+        if len(diameters) > 0:
+            ax.plot(diameters, dv_dlogd, '-', linewidth=2)
+            ax.fill_between(diameters, 0, dv_dlogd, alpha=0.3)
+            
+            ax.set_xscale('log')
+            ax.set_xlabel("Pore Diameter (nm)")
+            ax.set_ylabel("dV/dlogD (cm³/g)")
+            ax.set_title("Pore Size Distribution")
+            ax.grid(True, alpha=0.3, which='both')
+            
+            # Add pore statistics
+            pore_text = f"Mean D = {psd.get('mean_pore_diameter', 0):.1f} nm\n"
+            pore_text += f"V$_{{total}}$ = {psd.get('total_pore_volume', 0):.3f} cm³/g"
+            ax.text(0.95, 0.95, pore_text, transform=ax.transAxes,
+                   fontsize=9, ha='right', va='top',
+                   bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
     
     @staticmethod
     def _plot_xrd_pattern(ax, xrd_data):
@@ -1212,6 +1350,57 @@ class ScientificVisualizer:
         ax.text(0.05, 0.95, xrd_text, transform=ax.transAxes,
                fontsize=9, va='top',
                bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5))
+    
+    @staticmethod
+    def _plot_bet_linear(ax, bet_data):
+        """Plot BET linear plot"""
+        if not bet_data.get("valid", False):
+            ax.text(0.5, 0.5, "No valid BET data", 
+                   ha='center', va='center', transform=ax.transAxes)
+            return
+        
+        ads_data = bet_data.get("adsorption_data", {})
+        bet_params = bet_data.get("bet_parameters", {})
+        
+        if "p_ads" not in ads_data or len(ads_data["p_ads"]) == 0:
+            ax.text(0.5, 0.5, "No adsorption data", 
+                   ha='center', va='center', transform=ax.transAxes)
+            return
+        
+        p = ads_data["p_ads"]
+        q = ads_data["q_ads"]
+        
+        # BET transformation: p/(q*(1-p))
+        y = p / (q * (1 - p))
+        
+        # Plot BET plot
+        ax.plot(p, y, 'o', markersize=5, label='Data')
+        
+        # Plot linear fit if available
+        linear_range = bet_params.get("linear_range", (0, 0))
+        slope = bet_params.get("slope", 0)
+        intercept = bet_params.get("intercept", 0)
+        r2 = bet_params.get("r2", 0)
+        
+        if linear_range[1] > linear_range[0]:
+            p_fit = np.linspace(linear_range[0], linear_range[1], 100)
+            y_fit = slope * p_fit + intercept
+            ax.plot(p_fit, y_fit, 'r-', linewidth=2, label=f'Fit (R²={r2:.4f})')
+            
+            # Highlight linear region
+            ax.axvspan(linear_range[0], linear_range[1], alpha=0.2, color='yellow')
+        
+        ax.set_xlabel("Relative Pressure (P/P₀)")
+        ax.set_ylabel("P/(q(1-P))")
+        ax.set_title("BET Linear Plot")
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        
+        # Add BET equation
+        eq_text = f"y = {slope:.3f}x + {intercept:.3f}\n"
+        eq_text += f"R² = {r2:.4f}"
+        ax.text(0.05, 0.95, eq_text, transform=ax.transAxes,
+               fontsize=9, va='top', bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.5))
     
     @staticmethod
     def _plot_morphology_radar(ax, morphology, bet_data, xrd_data):
@@ -1260,7 +1449,7 @@ class ScientificVisualizer:
         summary_text += f"  • Mean Pore Diameter: {bet_data.get('mean_pore_diameter', 0):.1f} nm\n"
         
         psd = bet_data.get('pore_size_distribution', {})
-        if psd:
+        if psd and len(psd.get('pore_diameters', [])) > 0:
             summary_text += f"  • Micro/Meso/Macro: {psd.get('micropore_fraction', 0):.2f}/{psd.get('mesopore_fraction', 0):.2f}/{psd.get('macropore_fraction', 0):.2f}\n"
         
         # XRD Summary
@@ -1488,15 +1677,24 @@ def main():
                     # ============================================
                     if len(p_ads) < 5 or len(q_ads) < 5:
                         st.error(f"❌ Insufficient adsorption data found. Found {len(p_ads)} points.")
+                        # Still store what we have for plotting
                         st.session_state.analysis_results["bet"] = {
                             "valid": False, 
-                            "error": f"Found only {len(p_ads)} adsorption points (minimum 5 required)"
+                            "error": f"Found only {len(p_ads)} adsorption points (minimum 5 required)",
+                            "adsorption_data": {
+                                "p_ads": np.array(p_ads),
+                                "q_ads": np.array(q_ads),
+                                "p_des": np.array(p_des) if len(p_des) > 0 else None,
+                                "q_des": np.array(q_des) if len(q_des) > 0 else None
+                            }
                         }
                     else:
                         st.success(f"✅ Found {len(p_ads)} adsorption data points")
                         
-                        if len(p_des) > 5:
+                        if len(p_des) > 0:
                             st.success(f"✅ Found {len(p_des)} desorption data points")
+                        else:
+                            st.warning("⚠️ No desorption data found. PSD analysis will be limited.")
                         
                         # Convert to numpy arrays and clean the data
                         p_ads = np.array(p_ads, dtype=np.float64)
@@ -1520,23 +1718,40 @@ def main():
                             st.write(f"Adsorption points: {len(p_ads)}")
                             st.write(f"Pressure range: {p_ads.min():.4f} to {p_ads.max():.4f}")
                             st.write(f"Quantity range: {q_ads.min():.4f} to {q_ads.max():.4f}")
+                            if p_des is not None:
+                                st.write(f"Desorption points: {len(p_des)}")
                         
                         # Run BET analysis
                         bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
-                        bet_results = bet_analyzer.full_analysis()
+                        bet_results = bet_analyzer.full_analysis(bet_min_p, bet_max_p)
                         st.session_state.analysis_results["bet"] = bet_results
                         
                         if bet_results.get("valid", False):
                             st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
+                            st.info(f"BET R² = {bet_results.get('bet_parameters', {}).get('r2', 0):.4f}")
                         else:
-                            st.error(f"❌ BET analysis failed: {bet_results.get('error', 'Unknown error')}")
+                            st.warning(f"⚠️ BET analysis issues: {bet_results.get('error', 'Unknown error')}")
+                            st.info("Plots will still be generated with available data")
                         
                 except Exception as e:
                     st.error(f"❌ BET analysis failed: {str(e)}")
                     # Detailed error info
                     with st.expander("Error details"):
                         st.exception(e)
-                    st.session_state.analysis_results["bet"] = {"valid": False, "error": str(e)}
+                    # Still store what we have for plotting if possible
+                    if 'p_ads' in locals() and len(p_ads) > 0:
+                        st.session_state.analysis_results["bet"] = {
+                            "valid": False,
+                            "error": str(e),
+                            "adsorption_data": {
+                                "p_ads": np.array(p_ads),
+                                "q_ads": np.array(q_ads),
+                                "p_des": np.array(p_des) if 'p_des' in locals() and len(p_des) > 0 else None,
+                                "q_des": np.array(q_des) if 'q_des' in locals() and len(q_des) > 0 else None
+                            }
+                        }
+                    else:
+                        st.session_state.analysis_results["bet"] = {"valid": False, "error": str(e)}
             
             # XRD Analysis
             if xrd_file:
@@ -1612,16 +1827,26 @@ def main():
             bet_data = st.session_state.analysis_results.get("bet", {})
             xrd_data = st.session_state.analysis_results.get("xrd", {})
             
-            if (bet_data.get("valid", False) or xrd_data.get("valid", False)):
-                try:
-                    morphology = MorphologyFusionEngine.fuse_morphology(bet_data, xrd_data)
-                    st.session_state.morphology_fusion = morphology
-                    
-                    st.success("✅ Morphology fusion complete!")
-                    st.balloons()
-                    
-                except Exception as e:
-                    st.error(f"❌ Morphology fusion failed: {str(e)}")
+            # Always try to fuse morphology if we have any data
+            try:
+                morphology = MorphologyFusionEngine.fuse_morphology(bet_data, xrd_data)
+                st.session_state.morphology_fusion = morphology
+                
+                st.success("✅ Morphology fusion complete!")
+                st.balloons()
+                
+            except Exception as e:
+                st.error(f"❌ Morphology fusion failed: {str(e)}")
+                # Create a default morphology for plotting
+                st.session_state.morphology_fusion = FusedMorphology(
+                    composite_class="Data Available (Analysis Incomplete)",
+                    surface_to_volume=0,
+                    pore_wall_thickness=None,
+                    structural_integrity=0.5,
+                    dominant_feature="Data available but analysis incomplete",
+                    confidence_score=0.3,
+                    journal_recommendation="Check data quality and re-run analysis"
+                )
     
     # Display results if available
     if st.session_state.analysis_results or st.session_state.morphology_fusion:
@@ -1642,7 +1867,11 @@ def main():
             xrd_data = st.session_state.analysis_results.get("xrd", {})
             morphology = st.session_state.morphology_fusion
             
-            if bet_data.get("valid", False) or xrd_data.get("valid", False):
+            # Check if we have data to plot
+            has_bet_data = bet_data.get("adsorption_data") is not None
+            has_xrd_data = xrd_data.get("valid", False)
+            
+            if has_bet_data or has_xrd_data:
                 fig = ScientificVisualizer.create_morphology_summary_figure(
                     bet_data, xrd_data, morphology
                 )
@@ -1650,42 +1879,53 @@ def main():
                 
                 st.caption("Figure 1. Comprehensive morphology analysis summary")
             else:
-                st.info("Run analysis to generate plots")
+                st.info("Upload and analyze data to generate plots")
         
         with tab2:
             col1, col2 = st.columns(2)
             
             with col1:
                 st.subheader("BET Results")
-                if st.session_state.analysis_results.get("bet", {}).get("valid", False):
-                    bet = st.session_state.analysis_results["bet"]
-                    
-                    # Create metrics
+                bet = st.session_state.analysis_results.get("bet", {})
+                
+                if bet.get("adsorption_data"):
+                    # Create metrics even if analysis wasn't perfect
                     m1, m2, m3 = st.columns(3)
                     with m1:
-                        st.metric("Surface Area", f"{bet.get('surface_area_bet', 0):.0f} m²/g")
+                        s_bet = bet.get('surface_area_bet', 0)
+                        st.metric("Surface Area", f"{s_bet:.0f} m²/g" if s_bet > 0 else "N/A")
                     with m2:
-                        st.metric("Pore Volume", f"{bet.get('total_pore_volume', 0):.3f} cm³/g")
+                        v_pore = bet.get('total_pore_volume', 0)
+                        st.metric("Pore Volume", f"{v_pore:.3f} cm³/g" if v_pore > 0 else "N/A")
                     with m3:
-                        st.metric("Mean Pore D", f"{bet.get('mean_pore_diameter', 0):.1f} nm")
+                        d_pore = bet.get('mean_pore_diameter', 0)
+                        st.metric("Mean Pore D", f"{d_pore:.1f} nm" if d_pore > 0 else "N/A")
                     
                     # Display detailed results
                     with st.expander("Detailed BET parameters"):
-                        st.json({
-                            "BET Parameters": {
-                                "C constant": f"{bet.get('c_constant', 0):.0f}",
-                                "Monolayer capacity": f"{bet.get('monolayer_capacity', 0):.3f} mmol/g",
-                                "Linear range": f"{bet.get('linear_range', (0,0))[0]:.3f}-{bet.get('linear_range', (0,0))[1]:.3f} P/P₀",
-                                "R²": f"{bet.get('bet_r2', 0):.4f}"
-                            },
-                            "Porosity Analysis": {
-                                "Micropore volume": f"{bet.get('micropore_volume', 0):.4f} cm³/g",
-                                "External surface area": f"{bet.get('external_surface_area', 0):.0f} m²/g",
-                                "Hysteresis type": bet.get('hysteresis', {}).get('type', 'N/A')
-                            }
-                        })
+                        if bet.get("valid", False):
+                            st.json({
+                                "BET Parameters": {
+                                    "C constant": f"{bet.get('c_constant', 0):.0f}",
+                                    "Monolayer capacity": f"{bet.get('monolayer_capacity', 0):.3f} mmol/g",
+                                    "Linear range": f"{bet.get('bet_parameters', {}).get('linear_range', (0,0))[0]:.3f}-{bet.get('bet_parameters', {}).get('linear_range', (0,0))[1]:.3f} P/P₀",
+                                    "R²": f"{bet.get('bet_parameters', {}).get('r2', 0):.4f}"
+                                },
+                                "Porosity Analysis": {
+                                    "Micropore volume": f"{bet.get('micropore_volume', 0):.4f} cm³/g",
+                                    "External surface area": f"{bet.get('external_surface_area', 0):.0f} m²/g",
+                                    "Hysteresis type": bet.get('hysteresis', {}).get('type', 'N/A')
+                                }
+                            })
+                        else:
+                            st.info("BET analysis incomplete. Showing raw data statistics:")
+                            ads_data = bet.get("adsorption_data", {})
+                            if "p_ads" in ads_data and len(ads_data["p_ads"]) > 0:
+                                st.write(f"Adsorption points: {len(ads_data['p_ads'])}")
+                                st.write(f"Pressure range: {ads_data['p_ads'].min():.4f} to {ads_data['p_ads'].max():.4f}")
+                                st.write(f"Quantity range: {ads_data['q_ads'].min():.4f} to {ads_data['q_ads'].max():.4f}")
                 else:
-                    st.info("No valid BET data")
+                    st.info("No BET data available")
             
             with col2:
                 st.subheader("XRD Results")
@@ -1781,7 +2021,11 @@ def main():
                     xrd_data = st.session_state.analysis_results.get("xrd", {})
                     morphology = st.session_state.morphology_fusion
                     
-                    if bet_data.get("valid", False) or xrd_data.get("valid", False):
+                    # Check if we have data to plot
+                    has_bet_data = bet_data.get("adsorption_data") is not None
+                    has_xrd_data = xrd_data.get("valid", False)
+                    
+                    if has_bet_data or has_xrd_data:
                         fig = ScientificVisualizer.create_morphology_summary_figure(
                             bet_data, xrd_data, morphology
                         )

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bet-xrd-morphology
+    name: bet-analyzer
     env: python
     plan: free
     buildCommand: |
@@ -22,3 +22,4 @@ services:
       " > ~/.streamlit/config.toml
       
     startCommand: python3.10 -m streamlit run app.py
+

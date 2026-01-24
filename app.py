@@ -5,7 +5,7 @@ DOI: 10.XXXX/xxxx (Reserved)
 --------------------------------------------------------------------
 Copyright (c) 2024 [Your Institution]
 Licensed under MIT License
---------------------------------------------------------------------
+-------------------------------------------------------------------
 Features:
 1. IUPAC-compliant physisorption analysis
 2. XRD crystallinity & mesostructure analysis
@@ -58,7 +58,11 @@ plt.rcParams.update({
     'lines.markersize': 6,
     'grid.alpha': 0.3
 })
-    def detect_excel_format(file_content: bytes) -> str:
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+def detect_excel_format(file_content: bytes) -> str:
     """
     Detect Excel file format from magic bytes
     Returns: 'xls', 'xlsx', or 'unknown'
@@ -76,6 +80,7 @@ plt.rcParams.update({
         return 'xlsx'  # Treat as xlsx
     
     return 'unknown'
+
 # ============================================================================
 # CUSTOM EXCEPTIONS
 # ============================================================================
@@ -914,7 +919,7 @@ class ScientificVisualizer:
                 fontsize=16, fontweight='bold', va='top')
         
         # Panel D: Morphology radar chart
-        ax4 = fig.add_subplot(gs[1, :])
+        ax4 = fig.add_subplot(gs[1, :], projection='polar')
         ScientificVisualizer._plot_morphology_radar(ax4, morphology, bet_data, xrd_data)
         ax4.text(0.02, 0.98, 'D', transform=ax4.transAxes, 
                 fontsize=16, fontweight='bold', va='top')
@@ -1046,7 +1051,6 @@ class ScientificVisualizer:
         values += values[:1]
         angles += angles[:1]
         
-        ax = plt.subplot(111, projection='polar')
         ax.plot(angles, values, 'o-', linewidth=2)
         ax.fill(angles, values, alpha=0.25)
         
@@ -1177,7 +1181,6 @@ def main():
             st.session_state.analysis_results = {}
             st.session_state.morphology_fusion = None
             
-            # BET Analysis
             # BET Analysis
             if bet_file:
                 try:
@@ -1664,7 +1667,3 @@ def main():
 # ============================================================================
 if __name__ == "__main__":
     main()
-
-
-
-

@@ -55,6 +55,45 @@ plt.rcParams.update({
     'lines.markersize': 6,
     'grid.alpha': 0.3
 })
+    def detect_file_format(file_content: bytes, filename: str) -> str:
+        """
+        Detect the actual format of an uploaded file.
+        Returns: 'excel', 'csv', or 'unknown'
+        """
+        # Check Excel magic bytes
+        excel_signatures = [
+            b'\x50\x4B\x03\x04',  # ZIP (xlsx)
+            b'\xD0\xCF\x11\xE0',  # OLE (xls)
+            b'\x09\x00\x04\x00',  # Excel 2007+
+        ]
+        
+        csv_signatures = [
+            b',', b';', b'\t'  # Common CSV delimiters in first bytes
+        ]
+        
+        # Check first 20 bytes
+        first_bytes = file_content[:20]
+        
+        for sig in excel_signatures:
+            if first_bytes.startswith(sig):
+                return 'excel'
+        
+        # Check if it looks like CSV
+        try:
+            decoded = file_content[:1000].decode('utf-8', errors='ignore')
+            if any(delim in decoded for delim in [',', ';', '\t']):
+                return 'csv'
+        except:
+            pass
+        
+        # Check file extension as fallback
+        ext = filename.split('.')[-1].lower()
+        if ext in ['xls', 'xlsx']:
+            return 'excel'
+        elif ext in ['csv', 'txt', 'dat']:
+            return 'csv'
+        
+        return 'unknown'
 
 # ============================================================================
 # CUSTOM EXCEPTIONS
@@ -1160,31 +1199,97 @@ def main():
             # BET Analysis
             if bet_file:
                 try:
-                    # Read BET data
-                    if bet_file.name.endswith('.csv'):
-                        df_bet = pd.read_csv(bet_file)
+                    # Read BET data - FIXED VERSION
+                    file_extension = bet_file.name.split('.')[-1].lower()
+                    
+                    if file_extension in ['csv', 'txt']:
+                        # Try to read as CSV
+                        try:
+                            df_bet = pd.read_csv(bet_file)
+                        except:
+                            # Try with different encodings and separators
+                            bet_file.seek(0)  # Reset file pointer
+                            content = bet_file.read().decode('utf-8', errors='ignore')
+                            # Try to detect delimiter
+                            if ';' in content[:1000]:
+                                df_bet = pd.read_csv(io.StringIO(content), sep=';')
+                            elif '\t' in content[:1000]:
+                                df_bet = pd.read_csv(io.StringIO(content), sep='\t')
+                            else:
+                                df_bet = pd.read_csv(io.StringIO(content))
+                    
+                    elif file_extension in ['xls', 'xlsx']:
+                        # Read Excel file
+                        bet_file.seek(0)  # Reset file pointer
+                        
+                        if file_extension == 'xls':
+                            # For old .xls format
+                            df_bet = pd.read_excel(bet_file, engine='xlrd')
+                        else:
+                            # For .xlsx format
+                            df_bet = pd.read_excel(bet_file, engine='openpyxl')
+                    
                     else:
-                        df_bet = pd.read_excel(bet_file, engine='openpyxl')
+                        # Try to auto-detect
+                        bet_file.seek(0)
+                        try:
+                            df_bet = pd.read_excel(bet_file, engine='openpyxl')
+                        except:
+                            try:
+                                df_bet = pd.read_csv(bet_file)
+                            except:
+                                raise ValueError(f"Unsupported file format: {file_extension}")
                     
-                    # Extract adsorption data (adjust columns based on your format)
-                    # This is a simplified extraction - adjust based on your actual data format
-                    if len(df_bet.columns) >= 2:
-                        p_ads = df_bet.iloc[:, 0].dropna().values
-                        q_ads = df_bet.iloc[:, 1].dropna().values
+                    # Check if we got data
+                    if df_bet.empty:
+                        st.error("❌ The uploaded BET file appears to be empty")
+                        st.session_state.analysis_results["bet"] = {"valid": False, "error": "Empty file"}
+                    else:
+                        st.info(f"✅ BET file loaded successfully: {len(df_bet)} rows, {len(df_bet.columns)} columns")
                         
-                        # Extract desorption if available
-                        p_des = q_des = None
-                        if len(df_bet.columns) >= 4:
-                            p_des = df_bet.iloc[:, 2].dropna().values
-                            q_des = df_bet.iloc[:, 3].dropna().values
+                        # Show a preview of the data
+                        with st.expander("Preview BET data"):
+                            st.dataframe(df_bet.head())
+                            st.write(f"Columns: {list(df_bet.columns)}")
                         
-                        # Run BET analysis
-                        bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
-                        bet_results = bet_analyzer.full_analysis()
-                        st.session_state.analysis_results["bet"] = bet_results
+                        # Extract data based on column indices or names
+                        # Method 1: Try to find pressure/quantity columns by name
+                        pressure_col = None
+                        quantity_col = None
                         
-                        st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
-                    
+                        for col in df_bet.columns:
+                            col_lower = str(col).lower()
+                            if any(term in col_lower for term in ['pressure', 'p/p0', 'relative', 'p_rel']):
+                                pressure_col = col
+                            elif any(term in col_lower for term in ['quantity', 'adsorbed', 'q_ads', 'volume', 'cm3/g']):
+                                quantity_col = col
+                        
+                        # If column names not found, use column indices
+                        if pressure_col is None and quantity_col is None and len(df_bet.columns) >= 2:
+                            st.warning("⚠️ Using default column positions (0 for pressure, 1 for quantity)")
+                            pressure_col = df_bet.columns[0]
+                            quantity_col = df_bet.columns[1]
+                        
+                        if pressure_col and quantity_col:
+                            p_ads = df_bet[pressure_col].dropna().values
+                            q_ads = df_bet[quantity_col].dropna().values
+                            
+                            # Extract desorption if available (columns 2 and 3 if they exist)
+                            p_des = q_des = None
+                            if len(df_bet.columns) >= 4:
+                                p_des = df_bet.iloc[:, 2].dropna().values
+                                q_des = df_bet.iloc[:, 3].dropna().values
+                            
+                            # Run BET analysis
+                            bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
+                            bet_results = bet_analyzer.full_analysis()
+                            st.session_state.analysis_results["bet"] = bet_results
+                            
+                            st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
+                        else:
+                            st.error("❌ Could not identify pressure and quantity columns in the BET file")
+                            st.session_state.analysis_results["bet"] = {"valid": False, "error": "Column identification failed"}
+                            
                 except Exception as e:
                     st.error(f"❌ BET analysis failed: {str(e)}")
                     st.session_state.analysis_results["bet"] = {"valid": False, "error": str(e)}
@@ -1192,20 +1297,63 @@ def main():
             # XRD Analysis
             if xrd_file:
                 try:
-                    # Read XRD data
-                    df_xrd = pd.read_csv(xrd_file, header=None)
+                    # Read XRD data - FIXED VERSION
+                    file_extension = xrd_file.name.split('.')[-1].lower()
                     
-                    if len(df_xrd.columns) >= 2:
-                        theta = df_xrd.iloc[:, 0].dropna().values
-                        intensity = df_xrd.iloc[:, 1].dropna().values
+                    if file_extension in ['csv', 'txt', 'xy', 'dat']:
+                        # Try to read with different delimiters
+                        xrd_file.seek(0)  # Reset file pointer
+                        content = xrd_file.read().decode('utf-8', errors='ignore')
                         
-                        # Run XRD analysis
-                        xrd_analyzer = AdvancedXRDAnalyzer(xrd_wavelength)
-                        xrd_results = xrd_analyzer.analyze(theta, intensity)
-                        st.session_state.analysis_results["xrd"] = xrd_results
+                        # Try common delimiters
+                        for delimiter in [',', '\t', ';', ' ']:
+                            try:
+                                df_xrd = pd.read_csv(io.StringIO(content), sep=delimiter, header=None)
+                                if len(df_xrd.columns) >= 2:
+                                    break
+                            except:
+                                continue
                         
-                        st.success(f"✅ XRD analysis complete: Crystallinity = {xrd_results.get('crystallinity', {}).get('index', 0):.2f}")
+                        # If still not loaded, try with pandas default
+                        if 'df_xrd' not in locals():
+                            xrd_file.seek(0)
+                            df_xrd = pd.read_csv(xrd_file, header=None)
                     
+                    else:
+                        # Try as Excel
+                        xrd_file.seek(0)
+                        try:
+                            df_xrd = pd.read_excel(xrd_file, header=None, engine='openpyxl')
+                        except:
+                            raise ValueError(f"Unsupported XRD file format: {file_extension}")
+                    
+                    # Check data
+                    if df_xrd.empty:
+                        st.error("❌ The uploaded XRD file appears to be empty")
+                        st.session_state.analysis_results["xrd"] = {"valid": False, "error": "Empty file"}
+                    else:
+                        st.info(f"✅ XRD file loaded successfully: {len(df_xrd)} data points")
+                        
+                        # Show preview
+                        with st.expander("Preview XRD data"):
+                            st.dataframe(df_xrd.head())
+                            st.write(f"Data shape: {df_xrd.shape}")
+                        
+                        # Extract theta and intensity
+                        if len(df_xrd.columns) >= 2:
+                            theta = df_xrd.iloc[:, 0].dropna().values
+                            intensity = df_xrd.iloc[:, 1].dropna().values
+                            
+                            # Run XRD analysis
+                            xrd_analyzer = AdvancedXRDAnalyzer(xrd_wavelength)
+                            xrd_results = xrd_analyzer.analyze(theta, intensity)
+                            st.session_state.analysis_results["xrd"] = xrd_results
+                            
+                            st.success(f"✅ XRD analysis complete: Crystallinity = {xrd_results.get('crystallinity', {}).get('index', 0):.2f}")
+                        else:
+                            st.error("❌ XRD file must have at least 2 columns (2θ and Intensity)")
+                            st.session_state.analysis_results["xrd"] = {"valid": False, "error": "Insufficient columns"}
+                            
                 except Exception as e:
                     st.error(f"❌ XRD analysis failed: {str(e)}")
                     st.session_state.analysis_results["xrd"] = {"valid": False, "error": str(e)}
@@ -1449,3 +1597,4 @@ def main():
 # ============================================================================
 if __name__ == "__main__":
     main()
+

@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 import base64
 import io
+import json
 from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass
 import sys
@@ -80,6 +81,135 @@ def detect_excel_format(file_content: bytes) -> str:
         return 'xlsx'  # Treat as xlsx
     
     return 'unknown'
+
+def clean_and_sort_bet_data(p_values: np.ndarray, q_values: np.ndarray, 
+                           is_adsorption: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Clean and sort BET data to ensure strictly increasing (adsorption) 
+    or strictly decreasing (desorption) relative pressure.
+    """
+    # Remove any NaN or invalid values
+    valid_mask = ~np.isnan(p_values) & ~np.isnan(q_values) & (p_values > 0) & (p_values < 1)
+    p_clean = p_values[valid_mask]
+    q_clean = q_values[valid_mask]
+    
+    if len(p_clean) == 0:
+        return p_values, q_values
+    
+    # Sort by pressure
+    if is_adsorption:
+        # For adsorption: sort by increasing pressure
+        sort_indices = np.argsort(p_clean)
+    else:
+        # For desorption: sort by decreasing pressure
+        sort_indices = np.argsort(p_clean)[::-1]
+    
+    p_sorted = p_clean[sort_indices]
+    q_sorted = q_clean[sort_indices]
+    
+    # Remove duplicate pressure values (keep the first one for each pressure)
+    p_unique, unique_indices = np.unique(p_sorted, return_index=True)
+    q_unique = q_sorted[unique_indices]
+    
+    # Re-sort to maintain order
+    if is_adsorption:
+        sort_idx = np.argsort(p_unique)
+    else:
+        sort_idx = np.argsort(p_unique)[::-1]
+    
+    p_final = p_unique[sort_idx]
+    q_final = q_unique[sort_idx]
+    
+    # If we lost too many points, return original cleaned data
+    if len(p_final) < max(5, len(p_clean) * 0.5):
+        return p_sorted, q_sorted
+    
+    return p_final, q_final
+
+def extract_columns(df, p_ads_col, q_ads_col, p_des_col, q_des_col):
+    """Extract data from specific columns"""
+    p_ads, q_ads, p_des, q_des = [], [], [], []
+    
+    for i in range(len(df)):
+        try:
+            # Adsorption
+            if p_ads_col < df.shape[1] and q_ads_col < df.shape[1]:
+                p_val = df.iloc[i, p_ads_col]
+                q_val = df.iloc[i, q_ads_col]
+                if pd.notna(p_val) and pd.notna(q_val) and 0 < p_val < 1 and q_val > 0:
+                    p_ads.append(float(p_val))
+                    q_ads.append(float(q_val))
+            
+            # Desorption
+            if p_des_col < df.shape[1] and q_des_col < df.shape[1]:
+                p_val_des = df.iloc[i, p_des_col]
+                q_val_des = df.iloc[i, q_des_col]
+                if pd.notna(p_val_des) and pd.notna(q_val_des) and 0 < p_val_des < 1 and q_val_des > 0:
+                    p_des.append(float(p_val_des))
+                    q_des.append(float(q_val_des))
+        except:
+            continue
+    
+    return p_ads, q_ads, p_des, q_des
+
+def auto_detect_columns(df):
+    """Auto-detect pressure and quantity columns"""
+    p_ads, q_ads, p_des, q_des = [], [], [], []
+    
+    # Look for columns that contain pressure values (0-1)
+    pressure_cols = []
+    for col in range(min(20, df.shape[1])):
+        col_data = df.iloc[:, col].dropna()
+        if len(col_data) > 10:
+            sample = col_data.head(20).values
+            valid_vals = [x for x in sample if 0 <= x <= 1]
+            if len(valid_vals) >= len(sample) * 0.8:  # 80% of values in range
+                pressure_cols.append(col)
+    
+    # For each pressure column, check the next column for quantity
+    for p_col in pressure_cols:
+        if p_col + 1 < df.shape[1]:
+            p_vals = df.iloc[:, p_col].dropna().values
+            q_vals = df.iloc[:, p_col + 1].dropna().values
+            
+            min_len = min(len(p_vals), len(q_vals))
+            if min_len >= 5:
+                p_ads.extend(p_vals[:min_len])
+                q_ads.extend(q_vals[:min_len])
+                break
+    
+    return p_ads, q_ads, p_des, q_des
+
+def extract_bet_data_asap2420(df_bet):
+    """Extract BET data from ASAP 2420 format with multiple detection methods"""
+    methods = []
+    
+    # Method 1: Standard ASAP 2420 format (columns 11-14)
+    p_ads1, q_ads1, p_des1, q_des1 = extract_columns(df_bet, 11, 12, 13, 14)
+    if len(p_ads1) >= 5:
+        methods.append(("Standard ASAP 2420", p_ads1, q_ads1, p_des1, q_des1))
+    
+    # Method 2: Alternative column positions
+    for offset in range(-3, 4):
+        p_ads2, q_ads2, p_des2, q_des2 = extract_columns(df_bet, 
+                                                         11+offset, 12+offset, 
+                                                         13+offset, 14+offset)
+        if len(p_ads2) >= 5:
+            methods.append((f"Offset {offset}", p_ads2, q_ads2, p_des2, q_des2))
+    
+    # Method 3: Auto-detect pressure and quantity columns
+    p_ads3, q_ads3, p_des3, q_des3 = auto_detect_columns(df_bet)
+    if len(p_ads3) >= 5:
+        methods.append(("Auto-detected", p_ads3, q_ads3, p_des3, q_des3))
+    
+    # Choose the best method (most data points)
+    if methods:
+        methods.sort(key=lambda x: len(x[1]), reverse=True)
+        best_method = methods[0]
+        st.info(f"Using {best_method[0]} format with {len(best_method[1])} points")
+        return best_method[1], best_method[2], best_method[3], best_method[4]
+    
+    return [], [], [], []
 
 # ============================================================================
 # CUSTOM EXCEPTIONS
@@ -155,15 +285,35 @@ class IUPACBETAnalyzer:
         self._validate_data()
         
     def _validate_data(self):
-        """Validate according to IUPAC standards"""
-        if len(self.p_ads) < 10:
-            raise DataIntegrityError("Minimum 10 adsorption points required")
+        """Validate according to IUPAC standards with tolerance for real-world data"""
+        if len(self.p_ads) < 5:
+            raise DataIntegrityError(f"Minimum 5 adsorption points required, got {len(self.p_ads)}")
         
-        if not np.all(np.diff(self.p_ads) > 0):
-            raise IUPACViolationError("Relative pressure must be strictly increasing")
+        # Check if pressure values are generally increasing
+        p_diff = np.diff(self.p_ads)
         
-        if self.p_ads.max() < 0.05 or self.p_ads.max() < 0.3:
-            raise DataIntegrityError("Insufficient pressure range for BET analysis")
+        # Count decreasing steps
+        decreasing_steps = np.sum(p_diff <= 0)
+        
+        if decreasing_steps > 0:
+            # Sort the data
+            sort_idx = np.argsort(self.p_ads)
+            self.p_ads = self.p_ads[sort_idx]
+            self.q_ads = self.q_ads[sort_idx]
+            
+            # Remove duplicates
+            self.p_ads, unique_idx = np.unique(self.p_ads, return_index=True)
+            self.q_ads = self.q_ads[unique_idx]
+            
+            # Re-check
+            p_diff = np.diff(self.p_ads)
+            if np.any(p_diff <= 0):
+                st.warning("⚠️ Data contains duplicate pressure values after cleaning")
+        
+        if self.p_ads.max() < 0.05:
+            raise DataIntegrityError(f"Maximum pressure ({self.p_ads.max():.3f}) too low for BET analysis")
+        if self.p_ads.max() < 0.3:
+            st.warning(f"⚠️ Maximum pressure ({self.p_ads.max():.3f}) may be insufficient for accurate BET analysis")
     
     def analyze_bet_surface_area(self) -> Dict:
         """
@@ -448,7 +598,10 @@ class AdvancedXRDAnalyzer:
         I_corrected = I - background.values
         
         # Normalize to [0,1]
-        I_norm = (I_corrected - I_corrected.min()) / (I_corrected.max() - I_corrected.min())
+        if I_corrected.max() > I_corrected.min():
+            I_norm = (I_corrected - I_corrected.min()) / (I_corrected.max() - I_corrected.min())
+        else:
+            I_norm = I_corrected
         
         return theta, I_norm
     
@@ -1274,56 +1427,29 @@ def main():
                     # ============================================
                     st.info("🔍 Extracting BET data from standard ASAP 2420 format...")
                     
-                    # Method 1: Try ASAP 2420 specific columns
-                    p_ads, q_ads = [], []
-                    p_des, q_des = [], []
+                    p_ads, q_ads, p_des, q_des = extract_bet_data_asap2420(df_bet)
                     
-                    # ASAP 2420 format: Adsorption in columns L (11) and M (12)
-                    #                    Desorption in columns N (13) and O (14)
-                    #                    Starting from row 29 (0-indexed 28)
-                    
-                    for i in range(len(df_bet)):
-                        try:
-                            # Check if this looks like adsorption data
-                            p_val = df_bet.iloc[i, 11] if df_bet.shape[1] > 11 else None
-                            q_val = df_bet.iloc[i, 12] if df_bet.shape[1] > 12 else None
-                            
-                            if pd.notna(p_val) and pd.notna(q_val) and 0 < p_val < 1 and q_val > 0:
-                                p_ads.append(float(p_val))
-                                q_ads.append(float(q_val))
-                                
-                            # Check for desorption data
-                            if df_bet.shape[1] > 14:
-                                p_des_val = df_bet.iloc[i, 13] if df_bet.shape[1] > 13 else None
-                                q_des_val = df_bet.iloc[i, 14] if df_bet.shape[1] > 14 else None
-                                
-                                if pd.notna(p_des_val) and pd.notna(q_des_val) and 0 < p_des_val < 1 and q_des_val > 0:
-                                    p_des.append(float(p_des_val))
-                                    q_des.append(float(q_des_val))
-                        except:
-                            continue
-                    
-                    # Method 2: If ASAP format not found, try to auto-detect
+                    # If no data found with ASAP format, try basic detection
                     if len(p_ads) < 5:
-                        st.warning("⚠️ ASAP 2420 format not detected, trying auto-detection...")
+                        st.warning("⚠️ ASAP 2420 format not detected, trying basic detection...")
                         
-                        # Reset
-                        p_ads, q_ads = [], []
-                        
-                        # Find columns that look like pressure and quantity
-                        for col_idx in range(min(10, df_bet.shape[1])):
-                            col_data = df_bet.iloc[:, col_idx].dropna()
-                            if len(col_data) > 0:
-                                # Check if column looks like pressure (0-1 range)
-                                sample_vals = col_data.head(10).values
-                                if all(0 <= x <= 1 for x in sample_vals if pd.notna(x)):
-                                    p_col = col_idx
-                                    # Next column might be quantity
-                                    if col_idx + 1 < df_bet.shape[1]:
-                                        q_col = col_idx + 1
-                                        p_ads = df_bet.iloc[:, p_col].dropna().values
-                                        q_ads = df_bet.iloc[:, q_col].dropna().values
+                        # Simple detection: find first two columns with reasonable data
+                        for col1 in range(min(10, df_bet.shape[1] - 1)):
+                            col2 = col1 + 1
+                            try:
+                                # Check if these columns contain valid data
+                                data1 = df_bet.iloc[:, col1].dropna().values
+                                data2 = df_bet.iloc[:, col2].dropna().values
+                                
+                                if len(data1) >= 5 and len(data2) >= 5:
+                                    # Check if first column looks like pressure (0-1 range)
+                                    sample_p = data1[:10]
+                                    if all(0 <= x <= 1 for x in sample_p):
+                                        p_ads = data1
+                                        q_ads = data2[:len(data1)]
                                         break
+                            except:
+                                continue
                     
                     # ============================================
                     # 5. Validate extracted data
@@ -1340,7 +1466,7 @@ def main():
                         if len(p_des) > 5:
                             st.success(f"✅ Found {len(p_des)} desorption data points")
                         
-                        # Convert to numpy arrays
+                        # Convert to numpy arrays and clean the data
                         p_ads = np.array(p_ads, dtype=np.float64)
                         q_ads = np.array(q_ads, dtype=np.float64)
                         
@@ -1350,12 +1476,22 @@ def main():
                         else:
                             p_des = q_des = None
                         
+                        # Clean and sort adsorption data
+                        p_ads, q_ads = clean_and_sort_bet_data(p_ads, q_ads, is_adsorption=True)
+                        
+                        if p_des is not None and q_des is not None:
+                            # Clean and sort desorption data
+                            p_des, q_des = clean_and_sort_bet_data(p_des, q_des, is_adsorption=False)
+                        
                         # Run BET analysis
                         bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
                         bet_results = bet_analyzer.full_analysis()
                         st.session_state.analysis_results["bet"] = bet_results
                         
-                        st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
+                        if bet_results.get("valid", False):
+                            st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
+                        else:
+                            st.error(f"❌ BET analysis failed: {bet_results.get('error', 'Unknown error')}")
                         
                 except Exception as e:
                     st.error(f"❌ BET analysis failed: {str(e)}")
@@ -1639,7 +1775,6 @@ def main():
                 }
                 
                 # Convert to JSON
-                import json
                 json_str = json.dumps(export_data, indent=2, default=str)
                 
                 st.download_button(

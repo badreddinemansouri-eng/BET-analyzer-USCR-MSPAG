@@ -4,6 +4,21 @@ services:
     env: python
     plan: free
     buildCommand: |
+      # Force Python 3.10
+      python3.10 --version
+      
+      # Upgrade pip and install dependencies
       python3.10 -m pip install --upgrade pip
+      python3.10 -m pip install setuptools==68.2.2 wheel==0.42.0
       python3.10 -m pip install -r requirements.txt
-    startCommand: python3.10 -m streamlit run app.py --server.port $PORT --server.address=0.0.0.0
+      
+      # Create Streamlit config
+      mkdir -p ~/.streamlit/
+      echo "[server]
+      headless = true
+      port = \$PORT
+      enableCORS = false
+      enableXsrfProtection = false
+      " > ~/.streamlit/config.toml
+      
+    startCommand: python3.10 -m streamlit run app.py

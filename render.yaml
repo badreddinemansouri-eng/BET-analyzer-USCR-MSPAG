@@ -3,15 +3,10 @@ services:
     name: bet-xrd-morphology
     env: python
     plan: free
+    pythonVersion: "3.11.9"
     buildCommand: |
-      # Disable Poetry explicitly
-      export POETRY_VIRTUALENVS_CREATE=false
-      
-      # Install without building numpy from source
       pip install --upgrade pip
-      pip install numpy==1.26.4  # Version with Python 3.13 wheels
       pip install -r requirements.txt
-      
       mkdir -p ~/.streamlit/
       echo "[server]
       headless = true
@@ -19,5 +14,4 @@ services:
       enableCORS = false
       enableXsrfProtection = false
       " > ~/.streamlit/config.toml
-      
     startCommand: streamlit run app.py

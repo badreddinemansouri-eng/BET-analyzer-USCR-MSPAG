@@ -127,7 +127,7 @@ def clean_and_sort_bet_data(p_values: np.ndarray, q_values: np.ndarray,
     return p_final, q_final
 
 def extract_columns(df, p_ads_col, q_ads_col, p_des_col, q_des_col):
-    """Extract data from specific columns"""
+    """Extract data from specific columns with proper type conversion"""
     p_ads, q_ads, p_des, q_des = [], [], [], []
     
     for i in range(len(df)):
@@ -136,41 +136,72 @@ def extract_columns(df, p_ads_col, q_ads_col, p_des_col, q_des_col):
             if p_ads_col < df.shape[1] and q_ads_col < df.shape[1]:
                 p_val = df.iloc[i, p_ads_col]
                 q_val = df.iloc[i, q_ads_col]
-                if pd.notna(p_val) and pd.notna(q_val) and 0 < p_val < 1 and q_val > 0:
-                    p_ads.append(float(p_val))
-                    q_ads.append(float(q_val))
+                
+                # Convert to float if possible
+                try:
+                    p_val_float = float(p_val)
+                    q_val_float = float(q_val)
+                except (ValueError, TypeError):
+                    continue
+                
+                if pd.notna(p_val_float) and pd.notna(q_val_float) and 0 < p_val_float < 1 and q_val_float > 0:
+                    p_ads.append(p_val_float)
+                    q_ads.append(q_val_float)
             
             # Desorption
             if p_des_col < df.shape[1] and q_des_col < df.shape[1]:
                 p_val_des = df.iloc[i, p_des_col]
                 q_val_des = df.iloc[i, q_des_col]
-                if pd.notna(p_val_des) and pd.notna(q_val_des) and 0 < p_val_des < 1 and q_val_des > 0:
-                    p_des.append(float(p_val_des))
-                    q_des.append(float(q_val_des))
-        except:
+                
+                # Convert to float if possible
+                try:
+                    p_val_des_float = float(p_val_des)
+                    q_val_des_float = float(q_val_des)
+                except (ValueError, TypeError):
+                    continue
+                
+                if pd.notna(p_val_des_float) and pd.notna(q_val_des_float) and 0 < p_val_des_float < 1 and q_val_des_float > 0:
+                    p_des.append(p_val_des_float)
+                    q_des.append(q_val_des_float)
+        except Exception as e:
             continue
     
     return p_ads, q_ads, p_des, q_des
 
 def auto_detect_columns(df):
-    """Auto-detect pressure and quantity columns"""
+    """Auto-detect pressure and quantity columns with proper type conversion"""
     p_ads, q_ads, p_des, q_des = [], [], [], []
     
     # Look for columns that contain pressure values (0-1)
     pressure_cols = []
     for col in range(min(20, df.shape[1])):
-        col_data = df.iloc[:, col].dropna()
+        col_data = df.iloc[:, col]
         if len(col_data) > 10:
-            sample = col_data.head(20).values
-            valid_vals = [x for x in sample if 0 <= x <= 1]
-            if len(valid_vals) >= len(sample) * 0.8:  # 80% of values in range
-                pressure_cols.append(col)
+            # Try to convert column to numeric
+            numeric_col = pd.to_numeric(col_data, errors='coerce')
+            numeric_col = numeric_col.dropna()
+            
+            if len(numeric_col) > 10:
+                sample = numeric_col.head(20).values
+                # Safe conversion to float
+                valid_vals = []
+                for x in sample:
+                    try:
+                        x_float = float(x)
+                        if 0 <= x_float <= 1:
+                            valid_vals.append(x_float)
+                    except (ValueError, TypeError):
+                        continue
+                
+                if len(valid_vals) >= len(sample) * 0.8:  # 80% of values in range
+                    pressure_cols.append(col)
     
     # For each pressure column, check the next column for quantity
     for p_col in pressure_cols:
         if p_col + 1 < df.shape[1]:
-            p_vals = df.iloc[:, p_col].dropna().values
-            q_vals = df.iloc[:, p_col + 1].dropna().values
+            # Convert both columns to numeric
+            p_vals = pd.to_numeric(df.iloc[:, p_col], errors='coerce').dropna().values
+            q_vals = pd.to_numeric(df.iloc[:, p_col + 1], errors='coerce').dropna().values
             
             min_len = min(len(p_vals), len(q_vals))
             if min_len >= 5:
@@ -277,10 +308,10 @@ class IUPACBETAnalyzer:
     def __init__(self, p_rel: np.ndarray, q_ads: np.ndarray, 
                  p_des: Optional[np.ndarray] = None, 
                  q_des: Optional[np.ndarray] = None):
-        self.p_ads = np.asarray(p_rel)
-        self.q_ads = np.asarray(q_ads)
-        self.p_des = np.asarray(p_des) if p_des is not None else None
-        self.q_des = np.asarray(q_des) if q_des is not None else None
+        self.p_ads = np.asarray(p_rel, dtype=np.float64)
+        self.q_ads = np.asarray(q_ads, dtype=np.float64)
+        self.p_des = np.asarray(p_des, dtype=np.float64) if p_des is not None else None
+        self.q_des = np.asarray(q_des, dtype=np.float64) if q_des is not None else None
         
         self._validate_data()
         
@@ -1438,8 +1469,9 @@ def main():
                             col2 = col1 + 1
                             try:
                                 # Check if these columns contain valid data
-                                data1 = df_bet.iloc[:, col1].dropna().values
-                                data2 = df_bet.iloc[:, col2].dropna().values
+                                # Convert to numeric first
+                                data1 = pd.to_numeric(df_bet.iloc[:, col1], errors='coerce').dropna().values
+                                data2 = pd.to_numeric(df_bet.iloc[:, col2], errors='coerce').dropna().values
                                 
                                 if len(data1) >= 5 and len(data2) >= 5:
                                     # Check if first column looks like pressure (0-1 range)
@@ -1483,6 +1515,12 @@ def main():
                             # Clean and sort desorption data
                             p_des, q_des = clean_and_sort_bet_data(p_des, q_des, is_adsorption=False)
                         
+                        # Show cleaned data
+                        with st.expander("View cleaned BET data"):
+                            st.write(f"Adsorption points: {len(p_ads)}")
+                            st.write(f"Pressure range: {p_ads.min():.4f} to {p_ads.max():.4f}")
+                            st.write(f"Quantity range: {q_ads.min():.4f} to {q_ads.max():.4f}")
+                        
                         # Run BET analysis
                         bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
                         bet_results = bet_analyzer.full_analysis()
@@ -1503,12 +1541,12 @@ def main():
             # XRD Analysis
             if xrd_file:
                 try:
-                    # Read XRD data - FIXED VERSION
+                    # Read XRD data
                     file_extension = xrd_file.name.split('.')[-1].lower()
                     
                     if file_extension in ['csv', 'txt', 'xy', 'dat']:
                         # Try to read with different delimiters
-                        xrd_file.seek(0)  # Reset file pointer
+                        xrd_file.seek(0)
                         content = xrd_file.read().decode('utf-8', errors='ignore')
                         
                         # Try common delimiters
@@ -1547,8 +1585,14 @@ def main():
                         
                         # Extract theta and intensity
                         if len(df_xrd.columns) >= 2:
-                            theta = df_xrd.iloc[:, 0].dropna().values
-                            intensity = df_xrd.iloc[:, 1].dropna().values
+                            # Convert to numeric
+                            theta = pd.to_numeric(df_xrd.iloc[:, 0], errors='coerce').dropna().values
+                            intensity = pd.to_numeric(df_xrd.iloc[:, 1], errors='coerce').dropna().values
+                            
+                            # Ensure both arrays have same length
+                            min_len = min(len(theta), len(intensity))
+                            theta = theta[:min_len]
+                            intensity = intensity[:min_len]
                             
                             # Run XRD analysis
                             xrd_analyzer = AdvancedXRDAnalyzer(xrd_wavelength)

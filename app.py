@@ -25,6 +25,9 @@ import base64
 import io
 from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass
+import sys
+print(f"Python version: {sys.version}")
+print(f"Python path: {sys.executable}")
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -1661,6 +1664,7 @@ def main():
 # ============================================================================
 if __name__ == "__main__":
     main()
+
 
 
 

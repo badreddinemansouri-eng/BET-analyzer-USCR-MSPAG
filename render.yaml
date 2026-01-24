@@ -3,10 +3,23 @@ services:
     name: bet-xrd-morphology
     env: python
     plan: free
-    pythonVersion: "3.11.9"
+    # CRITICAL: Force pip, not Poetry
     buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
+      # Install Python 3.10 system packages
+      apt-get update && apt-get install -y python3.10 python3.10-dev python3.10-distutils
+      
+      # Set Python 3.10 as default
+      update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
+      update-alternatives --set python3 /usr/bin/python3.10
+      
+      # Install pip for Python 3.10
+      curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
+      
+      # Install requirements
+      python3.10 -m pip install --upgrade pip setuptools wheel
+      python3.10 -m pip install -r requirements.txt
+      
+      # Create Streamlit config
       mkdir -p ~/.streamlit/
       echo "[server]
       headless = true
@@ -14,4 +27,5 @@ services:
       enableCORS = false
       enableXsrfProtection = false
       " > ~/.streamlit/config.toml
-    startCommand: streamlit run app.py
+      
+    startCommand: python3.10 -m streamlit run app.py

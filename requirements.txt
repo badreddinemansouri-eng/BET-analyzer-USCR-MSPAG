@@ -4,5 +4,4 @@ pandas==2.0.0
 scipy==1.11.0
 matplotlib==3.7.0
 openpyxl==3.1.0
-xlrd==2.0.1  # For old .xls files
-chardet==5.2.0  # For encoding detection
+xlrd==2.0.1  # CRITICAL for old .xls files

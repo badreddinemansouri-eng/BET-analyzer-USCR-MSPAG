@@ -1,7 +1,9 @@
 streamlit==1.28.0
-numpy==1.24.0
-pandas==2.0.0
-scipy==1.11.0
-matplotlib==3.7.0
-openpyxl==3.1.0
-xlrd==2.0.1  # CRITICAL for old .xls files
+numpy==1.24.3
+pandas==2.0.3
+scipy==1.11.1
+matplotlib==3.7.2
+openpyxl==3.1.2
+xlrd==2.0.1
+setuptools==68.2.2
+wheel==0.42.0

@@ -55,46 +55,24 @@ plt.rcParams.update({
     'lines.markersize': 6,
     'grid.alpha': 0.3
 })
-    def detect_file_format(file_content: bytes, filename: str) -> str:
-        """
-        Detect the actual format of an uploaded file.
-        Returns: 'excel', 'csv', or 'unknown'
-        """
-        # Check Excel magic bytes
-        excel_signatures = [
-            b'\x50\x4B\x03\x04',  # ZIP (xlsx)
-            b'\xD0\xCF\x11\xE0',  # OLE (xls)
-            b'\x09\x00\x04\x00',  # Excel 2007+
-        ]
-        
-        csv_signatures = [
-            b',', b';', b'\t'  # Common CSV delimiters in first bytes
-        ]
-        
-        # Check first 20 bytes
-        first_bytes = file_content[:20]
-        
-        for sig in excel_signatures:
-            if first_bytes.startswith(sig):
-                return 'excel'
-        
-        # Check if it looks like CSV
-        try:
-            decoded = file_content[:1000].decode('utf-8', errors='ignore')
-            if any(delim in decoded for delim in [',', ';', '\t']):
-                return 'csv'
-        except:
-            pass
-        
-        # Check file extension as fallback
-        ext = filename.split('.')[-1].lower()
-        if ext in ['xls', 'xlsx']:
-            return 'excel'
-        elif ext in ['csv', 'txt', 'dat']:
-            return 'csv'
-        
-        return 'unknown'
-
+    def detect_excel_format(file_content: bytes) -> str:
+    """
+    Detect Excel file format from magic bytes
+    Returns: 'xls', 'xlsx', or 'unknown'
+    """
+    # Excel 97-2003 (.xls) - OLE Compound Document
+    if file_content.startswith(b'\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'):
+        return 'xls'
+    
+    # Excel 2007+ (.xlsx) - ZIP archive
+    if file_content.startswith(b'PK\x03\x04'):
+        return 'xlsx'
+    
+    # Excel 2007+ macro-enabled (.xlsm)
+    if file_content.startswith(b'PK\x03\x04\x14\x00\x06\x00'):
+        return 'xlsx'  # Treat as xlsx
+    
+    return 'unknown'
 # ============================================================================
 # CUSTOM EXCEPTIONS
 # ============================================================================
@@ -1197,101 +1175,187 @@ def main():
             st.session_state.morphology_fusion = None
             
             # BET Analysis
+            # BET Analysis
             if bet_file:
                 try:
-                    # Read BET data - FIXED VERSION
-                    file_extension = bet_file.name.split('.')[-1].lower()
+                    # Get file info
+                    file_name = bet_file.name
+                    file_extension = file_name.split('.')[-1].lower()
                     
-                    if file_extension in ['csv', 'txt']:
-                        # Try to read as CSV
+                    st.info(f"📁 Reading BET file: {file_name} (Type: {file_extension})")
+                    
+                    # Reset file pointer
+                    bet_file.seek(0)
+                    
+                    # ============================================
+                    # 1. Try to read as Excel
+                    # ============================================
+                    if file_extension in ['xls', 'xlsx']:
                         try:
-                            df_bet = pd.read_csv(bet_file)
-                        except:
-                            # Try with different encodings and separators
-                            bet_file.seek(0)  # Reset file pointer
-                            content = bet_file.read().decode('utf-8', errors='ignore')
-                            # Try to detect delimiter
-                            if ';' in content[:1000]:
-                                df_bet = pd.read_csv(io.StringIO(content), sep=';')
-                            elif '\t' in content[:1000]:
-                                df_bet = pd.read_csv(io.StringIO(content), sep='\t')
+                            if file_extension == 'xls':
+                                # Old Excel format (.xls) - use xlrd
+                                df_bet = pd.read_excel(bet_file, engine='xlrd', header=None)
+                                st.success("✅ Read as .xls file (xlrd engine)")
                             else:
-                                df_bet = pd.read_csv(io.StringIO(content))
-                    
-                    elif file_extension in ['xls', 'xlsx']:
-                        # Read Excel file
-                        bet_file.seek(0)  # Reset file pointer
-                        
-                        if file_extension == 'xls':
-                            # For old .xls format
-                            df_bet = pd.read_excel(bet_file, engine='xlrd')
-                        else:
-                            # For .xlsx format
-                            df_bet = pd.read_excel(bet_file, engine='openpyxl')
-                    
-                    else:
-                        # Try to auto-detect
-                        bet_file.seek(0)
-                        try:
-                            df_bet = pd.read_excel(bet_file, engine='openpyxl')
-                        except:
+                                # New Excel format (.xlsx) - use openpyxl
+                                df_bet = pd.read_excel(bet_file, engine='openpyxl', header=None)
+                                st.success("✅ Read as .xlsx file (openpyxl engine)")
+                                
+                        except Exception as excel_error:
+                            st.warning(f"⚠️ Excel read failed: {str(excel_error)[:100]}...")
+                            # Try as CSV/text
+                            bet_file.seek(0)
                             try:
-                                df_bet = pd.read_csv(bet_file)
+                                content = bet_file.read().decode('utf-8', errors='ignore')
+                                df_bet = pd.read_csv(io.StringIO(content), header=None)
+                                st.success("✅ Read as CSV/text file")
                             except:
-                                raise ValueError(f"Unsupported file format: {file_extension}")
+                                raise ValueError("Cannot read file as Excel or CSV")
                     
-                    # Check if we got data
-                    if df_bet.empty:
-                        st.error("❌ The uploaded BET file appears to be empty")
-                        st.session_state.analysis_results["bet"] = {"valid": False, "error": "Empty file"}
+                    # ============================================
+                    # 2. Try to read as CSV/TXT
+                    # ============================================
+                    elif file_extension in ['csv', 'txt']:
+                        try:
+                            # Try different encodings and delimiters
+                            content = bet_file.read().decode('utf-8', errors='ignore')
+                            bet_file.seek(0)
+                            
+                            # Try to detect delimiter
+                            first_line = content.split('\n')[0] if '\n' in content else content
+                            
+                            if ';' in first_line:
+                                df_bet = pd.read_csv(bet_file, delimiter=';', header=None)
+                            elif '\t' in first_line:
+                                df_bet = pd.read_csv(bet_file, delimiter='\t', header=None)
+                            elif ',' in first_line:
+                                df_bet = pd.read_csv(bet_file, delimiter=',', header=None)
+                            else:
+                                # Try with no header and auto-detect
+                                df_bet = pd.read_csv(bet_file, header=None)
+                                
+                            st.success("✅ Read as CSV file")
+                            
+                        except Exception as csv_error:
+                            st.warning(f"⚠️ CSV read failed: {str(csv_error)[:100]}...")
+                            # Try as Excel as fallback
+                            bet_file.seek(0)
+                            try:
+                                df_bet = pd.read_excel(bet_file, engine='openpyxl', header=None)
+                                st.success("✅ Read as Excel (fallback)")
+                            except:
+                                raise ValueError("Cannot read file")
+                    
+                    # ============================================
+                    # 3. Show data preview
+                    # ============================================
+                    with st.expander("📊 Data Preview", expanded=False):
+                        st.write(f"**Shape:** {df_bet.shape} (rows × columns)")
+                        st.write(f"**Columns:** {list(range(df_bet.shape[1]))}")
+                        st.dataframe(df_bet.head(10))
+                        
+                        # Show raw content for debugging
+                        if st.checkbox("Show raw file content (debug)"):
+                            bet_file.seek(0)
+                            raw_content = bet_file.read()[:5000]  # First 5000 bytes
+                            try:
+                                st.text(raw_content.decode('utf-8', errors='ignore'))
+                            except:
+                                st.code(str(raw_content))
+                    
+                    # ============================================
+                    # 4. Extract BET data (ASAP 2420 format)
+                    # ============================================
+                    st.info("🔍 Extracting BET data from standard ASAP 2420 format...")
+                    
+                    # Method 1: Try ASAP 2420 specific columns
+                    p_ads, q_ads = [], []
+                    p_des, q_des = [], []
+                    
+                    # ASAP 2420 format: Adsorption in columns L (11) and M (12)
+                    #                    Desorption in columns N (13) and O (14)
+                    #                    Starting from row 29 (0-indexed 28)
+                    
+                    for i in range(len(df_bet)):
+                        try:
+                            # Check if this looks like adsorption data
+                            p_val = df_bet.iloc[i, 11] if df_bet.shape[1] > 11 else None
+                            q_val = df_bet.iloc[i, 12] if df_bet.shape[1] > 12 else None
+                            
+                            if pd.notna(p_val) and pd.notna(q_val) and 0 < p_val < 1 and q_val > 0:
+                                p_ads.append(float(p_val))
+                                q_ads.append(float(q_val))
+                                
+                            # Check for desorption data
+                            if df_bet.shape[1] > 14:
+                                p_des_val = df_bet.iloc[i, 13] if df_bet.shape[1] > 13 else None
+                                q_des_val = df_bet.iloc[i, 14] if df_bet.shape[1] > 14 else None
+                                
+                                if pd.notna(p_des_val) and pd.notna(q_des_val) and 0 < p_des_val < 1 and q_des_val > 0:
+                                    p_des.append(float(p_des_val))
+                                    q_des.append(float(q_des_val))
+                        except:
+                            continue
+                    
+                    # Method 2: If ASAP format not found, try to auto-detect
+                    if len(p_ads) < 5:
+                        st.warning("⚠️ ASAP 2420 format not detected, trying auto-detection...")
+                        
+                        # Reset
+                        p_ads, q_ads = [], []
+                        
+                        # Find columns that look like pressure and quantity
+                        for col_idx in range(min(10, df_bet.shape[1])):
+                            col_data = df_bet.iloc[:, col_idx].dropna()
+                            if len(col_data) > 0:
+                                # Check if column looks like pressure (0-1 range)
+                                sample_vals = col_data.head(10).values
+                                if all(0 <= x <= 1 for x in sample_vals if pd.notna(x)):
+                                    p_col = col_idx
+                                    # Next column might be quantity
+                                    if col_idx + 1 < df_bet.shape[1]:
+                                        q_col = col_idx + 1
+                                        p_ads = df_bet.iloc[:, p_col].dropna().values
+                                        q_ads = df_bet.iloc[:, q_col].dropna().values
+                                        break
+                    
+                    # ============================================
+                    # 5. Validate extracted data
+                    # ============================================
+                    if len(p_ads) < 5 or len(q_ads) < 5:
+                        st.error(f"❌ Insufficient adsorption data found. Found {len(p_ads)} points.")
+                        st.session_state.analysis_results["bet"] = {
+                            "valid": False, 
+                            "error": f"Found only {len(p_ads)} adsorption points (minimum 5 required)"
+                        }
                     else:
-                        st.info(f"✅ BET file loaded successfully: {len(df_bet)} rows, {len(df_bet.columns)} columns")
+                        st.success(f"✅ Found {len(p_ads)} adsorption data points")
                         
-                        # Show a preview of the data
-                        with st.expander("Preview BET data"):
-                            st.dataframe(df_bet.head())
-                            st.write(f"Columns: {list(df_bet.columns)}")
+                        if len(p_des) > 5:
+                            st.success(f"✅ Found {len(p_des)} desorption data points")
                         
-                        # Extract data based on column indices or names
-                        # Method 1: Try to find pressure/quantity columns by name
-                        pressure_col = None
-                        quantity_col = None
+                        # Convert to numpy arrays
+                        p_ads = np.array(p_ads, dtype=np.float64)
+                        q_ads = np.array(q_ads, dtype=np.float64)
                         
-                        for col in df_bet.columns:
-                            col_lower = str(col).lower()
-                            if any(term in col_lower for term in ['pressure', 'p/p0', 'relative', 'p_rel']):
-                                pressure_col = col
-                            elif any(term in col_lower for term in ['quantity', 'adsorbed', 'q_ads', 'volume', 'cm3/g']):
-                                quantity_col = col
-                        
-                        # If column names not found, use column indices
-                        if pressure_col is None and quantity_col is None and len(df_bet.columns) >= 2:
-                            st.warning("⚠️ Using default column positions (0 for pressure, 1 for quantity)")
-                            pressure_col = df_bet.columns[0]
-                            quantity_col = df_bet.columns[1]
-                        
-                        if pressure_col and quantity_col:
-                            p_ads = df_bet[pressure_col].dropna().values
-                            q_ads = df_bet[quantity_col].dropna().values
-                            
-                            # Extract desorption if available (columns 2 and 3 if they exist)
-                            p_des = q_des = None
-                            if len(df_bet.columns) >= 4:
-                                p_des = df_bet.iloc[:, 2].dropna().values
-                                q_des = df_bet.iloc[:, 3].dropna().values
-                            
-                            # Run BET analysis
-                            bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
-                            bet_results = bet_analyzer.full_analysis()
-                            st.session_state.analysis_results["bet"] = bet_results
-                            
-                            st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
+                        if len(p_des) > 0:
+                            p_des = np.array(p_des, dtype=np.float64)
+                            q_des = np.array(q_des, dtype=np.float64)
                         else:
-                            st.error("❌ Could not identify pressure and quantity columns in the BET file")
-                            st.session_state.analysis_results["bet"] = {"valid": False, "error": "Column identification failed"}
-                            
+                            p_des = q_des = None
+                        
+                        # Run BET analysis
+                        bet_analyzer = IUPACBETAnalyzer(p_ads, q_ads, p_des, q_des)
+                        bet_results = bet_analyzer.full_analysis()
+                        st.session_state.analysis_results["bet"] = bet_results
+                        
+                        st.success(f"✅ BET analysis complete: S_BET = {bet_results.get('surface_area_bet', 0):.0f} m²/g")
+                        
                 except Exception as e:
                     st.error(f"❌ BET analysis failed: {str(e)}")
+                    # Detailed error info
+                    with st.expander("Error details"):
+                        st.exception(e)
                     st.session_state.analysis_results["bet"] = {"valid": False, "error": str(e)}
             
             # XRD Analysis
@@ -1597,4 +1661,5 @@ def main():
 # ============================================================================
 if __name__ == "__main__":
     main()
+
 
